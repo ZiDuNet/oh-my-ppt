@@ -224,6 +224,7 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
   };
 
   const promoteToWrapper = (element) => {
+    if (element.getAttribute("data-block-id")) return element;
     const contentRoot = getContentRoot(element);
     if (!contentRoot) return element;
     let candidate = element.parentElement;
