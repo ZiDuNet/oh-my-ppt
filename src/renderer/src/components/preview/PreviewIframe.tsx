@@ -20,6 +20,10 @@ export interface PreviewIframeHandle {
     selector: string,
     patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string } }
   ) => void
+  setElementLayout: (
+    selector: string,
+    layout: { x?: number; y?: number; width?: number; height?: number }
+  ) => void
   clearEditModeSelection: () => void
 }
 
@@ -181,6 +185,17 @@ export const PreviewIframe = forwardRef<
           `if (window.__pptEditModeLiveUpdate) window.__pptEditModeLiveUpdate(${JSON.stringify(selector)}, ${JSON.stringify(patch)});`
         )
       },
+      setElementLayout(
+        selector: string,
+        layout: { x?: number; y?: number; width?: number; height?: number }
+      ): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `if (window.__pptEditModeSetLayout) window.__pptEditModeSetLayout(${JSON.stringify(selector)}, ${JSON.stringify(layout)});`
+        )
+      },
       clearEditModeSelection(): void {
         const wv = webviewRef.current
         if (!wv) return
@@ -287,6 +302,8 @@ export const PreviewIframe = forwardRef<
           text?: string
           style?: EditSelectionPayload['style']
           bounds?: EditSelectionPayload['bounds']
+          translateX?: number
+          translateY?: number
         }
 
         // Inspector: element selected (AI mode)
@@ -325,7 +342,9 @@ export const PreviewIframe = forwardRef<
               isText: Boolean(parsed.isText),
               text: typeof parsed.text === 'string' ? parsed.text : '',
               style: parsed.style || {},
-              bounds: parsed.bounds
+              bounds: parsed.bounds,
+              translateX: Number(parsed.translateX || 0),
+              translateY: Number(parsed.translateY || 0)
             })
           })().catch(() => {})
           return

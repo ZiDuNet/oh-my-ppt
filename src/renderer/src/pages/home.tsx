@@ -286,7 +286,6 @@ export function HomePage(): ReactElement {
       documentInputRef.current.value = ''
     }
     if (selectedFiles.length === 0) return
-    if (!(await ensureUploadPrerequisites())) return
     if (selectedFiles.length > 1) {
       const message = t('home.documentSingleOnly')
       setDocumentParseError(message)
@@ -371,7 +370,6 @@ export function HomePage(): ReactElement {
       pptxInputRef.current.value = ''
     }
     if (selectedFiles.length === 0) return
-    if (!(await ensureUploadPrerequisites())) return
     if (selectedFiles.length > 1) {
       error(t('home.pptxSingleOnlyTitle'), {
         description: t('home.pptxSingleOnly')

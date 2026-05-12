@@ -1,35 +1,12 @@
 import { ipcMain } from 'electron'
 import * as cheerio from 'cheerio'
 import fs from 'fs'
+import { nanoid } from 'nanoid'
 import type { AnyNode } from 'domhandler'
 import type { IpcContext } from '../context'
 
 const SCAFFOLD_BLOCK_IDS = new Set(['content', 'page', 'root'])
 const BLOCKED_TAGS = new Set(['html', 'head', 'body', 'script', 'style', 'link', 'meta', 'title'])
-const TEXT_TAGS = new Set([
-  'h1',
-  'h2',
-  'h3',
-  'h4',
-  'h5',
-  'h6',
-  'p',
-  'li',
-  'span',
-  'strong',
-  'em',
-  'b',
-  'i',
-  'small',
-  'label',
-  'button',
-  'td',
-  'th',
-  'blockquote',
-  'figcaption'
-])
-const VISUAL_CLASS_RE =
-  /(?:^|[-_\s])(card|panel|chart|graph|plot|metric|stat|timeline|diagram|visual|figure|image|media|table|ranking|rank|top|list|item|tile|badge|kpi|summary|callout)(?:$|[-_\s])/i
 
 const htmlWriteLocks = new Map<string, Promise<void>>()
 
@@ -48,57 +25,13 @@ async function withHtmlFileLock<T>(htmlPath: string, fn: () => Promise<T>): Prom
   })
 }
 
-const normalizeBlockIdBase = (value: string): string =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'element'
-
 const attrEscape = (value: string): string => value.replace(/"/g, '\\"')
 
 const stableSelectorFor = (pageId: string, blockId: string): string =>
   `body[data-page-id="${attrEscape(pageId)}"] [data-block-id="${attrEscape(blockId)}"]`
 
-function allocateBlockId($: cheerio.CheerioAPI, base: string): string {
-  const used = new Set<string>()
-  $('[data-block-id]').each((_, node) => {
-    const id = ($(node).attr('data-block-id') || '').trim()
-    if (id) used.add(id)
-  })
-  const normalized = normalizeBlockIdBase(base)
-  let candidate = normalized
-  let suffix = 1
-  while (used.has(candidate)) {
-    candidate = `${normalized}-${suffix}`
-    suffix += 1
-  }
-  return candidate
-}
-
-function directText(el: cheerio.Cheerio<AnyNode>): string {
-  return el
-    .contents()
-    .toArray()
-    .filter((node) => node.type === 'text')
-    .map((node) => ('data' in node ? String(node.data || '') : ''))
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function anchorBaseForElement(target: cheerio.Cheerio<AnyNode>, tagName: string): string {
-  const classRaw = target.attr('class') || ''
-  const role = target.attr('data-role') || ''
-  const id = target.attr('id') || ''
-  const identity = `${role} ${classRaw} ${id}`
-  const visualMatch = identity.match(VISUAL_CLASS_RE)
-  if (TEXT_TAGS.has(tagName) && directText(target)) return `selected-text-${tagName}`
-  if (visualMatch?.[1]) return `selected-${visualMatch[1]}`
-  if (tagName === 'svg' || target.closest('svg').length > 0) return `selected-svg-${tagName}`
-  if (tagName === 'img' || tagName === 'picture' || tagName === 'video') return `selected-media`
-  if (tagName === 'figure' || tagName === 'table') return `selected-${tagName}`
-  return `selected-${tagName || 'element'}`
+function allocateBlockId(): string {
+  return 'select-arcsin1-' + nanoid(8)
 }
 
 function assertAnchorableElement(target: cheerio.Cheerio<AnyNode>): void {
@@ -149,8 +82,7 @@ function ensureElementAnchorInHtml(
       changed: false
     }
   }
-  const tagName = String((target.get(0) as { tagName?: string })?.tagName || args.elementTag || 'element').toLowerCase()
-  const blockId = allocateBlockId($, anchorBaseForElement(target, tagName))
+  const blockId = allocateBlockId()
   target.attr('data-block-id', blockId)
   return {
     html: $.html(),

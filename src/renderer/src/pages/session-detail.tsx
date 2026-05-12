@@ -36,7 +36,11 @@ const EMPTY_ELEMENT_DRAFT: ElementEditDraft = {
   text: '',
   color: '#34402c',
   fontSize: '',
-  fontWeight: '400'
+  fontWeight: '400',
+  layoutX: '',
+  layoutY: '',
+  layoutWidth: '',
+  layoutHeight: ''
 }
 
 function normalizePagesForSelection(
@@ -861,8 +865,26 @@ export function SessionDetailPage(): React.JSX.Element {
   }
 
   const handleElementMoved = (payload: EditModeMovePayload): void => {
-    console.log('[DEBUG] handleElementMoved called', { selector: payload.selector, x: payload.x, y: payload.y, deltaX: payload.deltaX, deltaY: payload.deltaY, id, htmlPath: selectedPage?.htmlPath, pageId: selectedPage?.pageId })
     if (!id || !selectedPage?.htmlPath || !selectedPage.pageId) return
+
+    // Sync inspector panel layout fields when the selected element is dragged
+    // payload.x/y are translate offsets (--ppt-drag-x/y), convert to visual position for display
+    if (textSelection && payload.selector === textSelection.selector) {
+      const originalCSSX =
+        (textSelection.bounds?.x ?? 0) - (textSelection.translateX ?? 0)
+      const originalCSSY =
+        (textSelection.bounds?.y ?? 0) - (textSelection.translateY ?? 0)
+      const visualX = originalCSSX + payload.x
+      const visualY = originalCSSY + payload.y
+      setTextDraft((prev) => ({
+        ...prev,
+        layoutX: String(Math.round(visualX)),
+        layoutY: String(Math.round(visualY)),
+        ...(payload.width !== undefined ? { layoutWidth: String(Math.round(payload.width)) } : {}),
+        ...(payload.height !== undefined ? { layoutHeight: String(Math.round(payload.height)) } : {})
+      }))
+    }
+
     const nextEdit = {
       ...payload,
       pageId: selectedPage.pageId,
@@ -974,10 +996,20 @@ export function SessionDetailPage(): React.JSX.Element {
         text: payload.text,
         color: rgbToHex(payload.style.color),
         fontSize: fontSizeToNumber(payload.style.fontSize),
-        fontWeight: normalizeFontWeight(payload.style.fontWeight)
+        fontWeight: normalizeFontWeight(payload.style.fontWeight),
+        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
+        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
+        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
+        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : ''
       })
     } else {
-      setTextDraft(EMPTY_ELEMENT_DRAFT)
+      setTextDraft({
+        ...EMPTY_ELEMENT_DRAFT,
+        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
+        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
+        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
+        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : ''
+      })
     }
   }
 
@@ -994,6 +1026,65 @@ export function SessionDetailPage(): React.JSX.Element {
         }
       })
     }
+  }
+
+  const handleLayoutDraftChange = (layout: {
+    x: string
+    y: string
+    width: string
+    height: string
+  }): void => {
+    if (!textSelection || !selectedPage?.pageId || !textSelection.bounds) return
+
+    // NaN guard for partial input (e.g. user typed just "-")
+    if (layout.x !== '' && !Number.isFinite(Number(layout.x))) return
+    if (layout.y !== '' && !Number.isFinite(Number(layout.y))) return
+    if (layout.width !== '' && !Number.isFinite(Number(layout.width))) return
+    if (layout.height !== '' && !Number.isFinite(Number(layout.height))) return
+
+    // Live preview in iframe
+    const layoutPatch: Record<string, number> = {}
+    if (layout.x !== '') layoutPatch.x = Number(layout.x)
+    if (layout.y !== '') layoutPatch.y = Number(layout.y)
+    if (layout.width !== '') layoutPatch.width = Number(layout.width)
+    if (layout.height !== '') layoutPatch.height = Number(layout.height)
+    previewIframeRef.current?.setElementLayout(textSelection.selector, layoutPatch)
+
+    // Record as pending drag edit (upsert by pageId + htmlPath + selector, same key as handleElementMoved)
+    if (!id || !selectedPage?.htmlPath) return
+    // All offsets are computed relative to the initial selection snapshot.
+    // Each keystroke recalculates from the original bounds, so multiple edits
+    // produce the correct final value via upsert overwrite.
+    const prevX = textSelection.bounds.x
+    const prevY = textSelection.bounds.y
+    const newAbsX = layout.x !== '' ? Number(layout.x) : prevX
+    const newAbsY = layout.y !== '' ? Number(layout.y) : prevY
+    const newDragX = (textSelection.translateX ?? 0) + (newAbsX - prevX)
+    const newDragY = (textSelection.translateY ?? 0) + (newAbsY - prevY)
+
+    const nextEdit: EditModeMovePayload & { pageId: string; htmlPath: string } = {
+      selector: textSelection.selector,
+      label: textSelection.selector,
+      elementTag: textSelection.elementTag,
+      x: newDragX,
+      y: newDragY,
+      deltaX: newDragX - (textSelection.translateX ?? 0),
+      deltaY: newDragY - (textSelection.translateY ?? 0),
+      ...(layout.width !== '' ? { width: Number(layout.width) } : {}),
+      ...(layout.height !== '' ? { height: Number(layout.height) } : {}),
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath
+    }
+    setPendingDragEdits((items) => {
+      const idx = items.findIndex(
+        (item) =>
+          item.pageId === nextEdit.pageId &&
+          item.htmlPath === nextEdit.htmlPath &&
+          item.selector === nextEdit.selector
+      )
+      if (idx < 0) return [...items, nextEdit]
+      return items.map((item, i) => (i === idx ? nextEdit : item))
+    })
   }
 
   // When user starts editing a new element, save the previous text edit as pending
@@ -1102,6 +1193,7 @@ export function SessionDetailPage(): React.JSX.Element {
               selection={textSelection}
               draft={textDraft}
               onDraftChange={handleTextDraftChange}
+              onLayoutChange={handleLayoutDraftChange}
               onClose={handleCancelTextEdit}
             />
           )}

@@ -223,12 +223,28 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     return rect.width >= 2 && rect.height >= 2;
   };
 
+  const promoteToWrapper = (element) => {
+    const contentRoot = getContentRoot(element);
+    if (!contentRoot) return element;
+    let candidate = element.parentElement;
+    while (candidate && candidate !== contentRoot) {
+      if (isScaffoldBlock(candidate)) break;
+      const hasBlockChildren = candidate.querySelectorAll("[data-block-id]").length >= 2;
+      const noBlockId = !candidate.getAttribute("data-block-id");
+      if (noBlockId && hasBlockChildren && buildStableSelector(candidate)) {
+        return candidate;
+      }
+      candidate = candidate.parentElement;
+    }
+    return element;
+  };
+
   const pickTarget = (origin) => {
     if (!(origin instanceof Element)) return null;
     let candidate = origin;
     const boundaryRoot = getContentRoot(origin) || getPageRoot(origin);
     while (candidate && candidate !== boundaryRoot) {
-      if (isUsableTarget(candidate) && buildStableSelector(candidate)) return candidate;
+      if (isUsableTarget(candidate) && buildStableSelector(candidate)) return promoteToWrapper(candidate);
       candidate = candidate.parentElement;
     }
     return null;

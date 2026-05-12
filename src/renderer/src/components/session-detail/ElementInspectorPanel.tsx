@@ -9,21 +9,49 @@ export interface ElementEditDraft {
   color: string
   fontSize: string
   fontWeight: string
+  layoutX: string
+  layoutY: string
+  layoutWidth: string
+  layoutHeight: string
 }
+
+type LayoutField = 'layoutX' | 'layoutY' | 'layoutWidth' | 'layoutHeight'
+
+const LAYOUT_LABELS: Array<{ field: LayoutField; label: string }> = [
+  { field: 'layoutX', label: 'X' },
+  { field: 'layoutY', label: 'Y' },
+  { field: 'layoutWidth', label: 'W' },
+  { field: 'layoutHeight', label: 'H' }
+]
 
 export function ElementInspectorPanel({
   selection,
   draft,
   onDraftChange,
+  onLayoutChange,
   onClose
 }: {
   selection: EditSelectionPayload | null
   draft: ElementEditDraft
   onDraftChange: (draft: ElementEditDraft) => void
+  onLayoutChange: (layout: { x: string; y: string; width: string; height: string }) => void
   onClose: () => void
 }): React.JSX.Element {
   const t = useT()
   const isText = selection?.isText ?? false
+
+  const handleLayoutInput = (field: LayoutField, value: string): void => {
+    onDraftChange({ ...draft, [field]: value })
+  }
+
+  const handleLayoutBlur = (): void => {
+    onLayoutChange({
+      x: draft.layoutX,
+      y: draft.layoutY,
+      width: draft.layoutWidth,
+      height: draft.layoutHeight
+    })
+  }
 
   return (
     <div className="flex h-full w-[320px] shrink-0 flex-col border-l border-[#d9cfbd]/60 bg-[#fffaf1]/96 shadow-[-8px_0_24px_rgba(93,107,77,0.06)]">
@@ -50,20 +78,26 @@ export function ElementInspectorPanel({
 
       {/* Content */}
       <div className="flex-1 space-y-3 overflow-y-auto px-3.5 py-3.5">
-        {/* Bounds info (always shown) */}
-        {selection?.bounds && (
-          <div className="space-y-1.5">
-            <span className="text-xs font-medium text-[#657058]">
-              {t('sessionDetail.adjustLayout')}
-            </span>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-[#5a674b]">
-              <span>x: {Math.round(selection.bounds.x)}</span>
-              <span>y: {Math.round(selection.bounds.y)}</span>
-              <span>w: {Math.round(selection.bounds.width)}</span>
-              <span>h: {Math.round(selection.bounds.height)}</span>
-            </div>
+        {/* Layout editing (always shown) */}
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-medium text-[#7a875f]">
+            {t('sessionDetail.adjustLayout')}
+          </span>
+          <div className="grid grid-cols-2 gap-2">
+            {LAYOUT_LABELS.map(({ field, label }) => (
+              <label key={field} className="block space-y-1">
+                <span className="text-[11px] font-medium text-[#7a875f]">{label}</span>
+                <Input
+                  type="number"
+                  value={draft[field]}
+                  onChange={(e) => handleLayoutInput(field, e.target.value)}
+                  onBlur={handleLayoutBlur}
+                  className="h-9 rounded-[10px] border-[#d7cbb7]/80 bg-[#fffdf8]/92 px-2.5 text-xs text-center"
+                />
+              </label>
+            ))}
           </div>
-        )}
+        </div>
 
         {/* Text editing (only for text elements) */}
         {isText && (

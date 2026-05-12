@@ -21,6 +21,8 @@ export interface EditSelectionPayload {
     width: number
     height: number
   }
+  translateX: number
+  translateY: number
 }
 
 export interface EditModeMovePayload {
@@ -380,16 +382,32 @@ export function buildEditModeInjectScript(previewScale = 1): string {
     return null;
   };
 
+  const promoteToWrapper = (element) => {
+    const contentRoot = getContentRoot(element);
+    if (!contentRoot) return element;
+    let candidate = element.parentElement;
+    while (candidate && candidate !== contentRoot) {
+      if (isScaffoldBlock(candidate)) break;
+      const hasBlockChildren = candidate.querySelectorAll("[data-block-id]").length >= 2;
+      const noBlockId = !candidate.getAttribute("data-block-id");
+      if (noBlockId && hasBlockChildren && buildStableSelector(candidate)) {
+        return candidate;
+      }
+      candidate = candidate.parentElement;
+    }
+    return element;
+  };
+
   const pickTarget = (origin, clientX, clientY) => {
     if (!(origin instanceof Element)) return null;
     const chartTarget = pickCanvasTarget(origin);
     if (chartTarget) return chartTarget;
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
       const pointTarget = getPointTarget(origin, clientX, clientY);
-      if (pointTarget) return pointTarget;
+      if (pointTarget) return promoteToWrapper(pointTarget);
     }
     const looseTarget = pickLooseContentTarget(origin);
-    if (looseTarget) return looseTarget;
+    if (looseTarget) return promoteToWrapper(looseTarget);
     const blocks = Array.from(origin.closest(".ppt-page-root, [data-ppt-guard-root='1']")?.querySelectorAll("[data-block-id]") || []);
     const target = origin.closest("[data-block-id]");
     if (target && blocks.includes(target) && isInsidePageRoot(target) && !isScaffoldBlock(target)) {
@@ -690,6 +708,8 @@ export function buildEditModeInjectScript(previewScale = 1): string {
     const elementText = rawText.length > 80 ? rawText.slice(0, 80) + "\\u2026" : rawText;
     const computed = isText ? window.getComputedStyle(target) : null;
     const rect = target.getBoundingClientRect();
+    const currentDragX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
+    const currentDragY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
 
     console.log(LOG_PREFIX + JSON.stringify({
       type: "selected",
@@ -712,7 +732,9 @@ export function buildEditModeInjectScript(previewScale = 1): string {
         y: Math.round(rect.top * 10) / 10,
         width: Math.round(rect.width * 10) / 10,
         height: Math.round(rect.height * 10) / 10
-      }
+      },
+      translateX: currentDragX,
+      translateY: currentDragY
     }));
   };
 
@@ -1093,6 +1115,28 @@ export function buildEditModeInjectScript(previewScale = 1): string {
     } catch (_error) {}
   };
 
+  window.__pptEditModeSetLayout = (selector, layout) => {
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      const currentDragX = parsePx(el.style.getPropertyValue("--ppt-drag-x"));
+      const currentDragY = parsePx(el.style.getPropertyValue("--ppt-drag-y"));
+      const rect = el.getBoundingClientRect();
+      if (layout.x !== undefined || layout.y !== undefined) {
+        const baseLeft = rect.left - currentDragX;
+        const baseTop = rect.top - currentDragY;
+        const newDragX = layout.x !== undefined ? (layout.x - baseLeft) : currentDragX;
+        const newDragY = layout.y !== undefined ? (layout.y - baseTop) : currentDragY;
+        el.style.setProperty("--ppt-drag-x", newDragX.toFixed(1) + "px");
+        el.style.setProperty("--ppt-drag-y", newDragY.toFixed(1) + "px");
+      }
+      if (layout.width !== undefined) el.style.width = Math.max(1, layout.width).toFixed(1) + "px";
+      if (layout.height !== undefined) el.style.height = Math.max(1, layout.height).toFixed(1) + "px";
+      ensureDragTranslate(el);
+      updateOverlay();
+    } catch (_error) {}
+  };
+
   window.__pptEditModeClearSelection = () => {
     if (selectedElement) {
       selectedElement.classList.remove(SELECTED_CLASS);
@@ -1133,6 +1177,7 @@ export function buildEditModeInjectScript(previewScale = 1): string {
     dragPendingState = null;
     delete window.__pptResolveEditModeAnchor;
     delete window.__pptEditModeLiveUpdate;
+    delete window.__pptEditModeSetLayout;
     delete window.__pptEditModeClearSelection;
     delete window.__pptEditModeSetPreviewScale;
     const style = document.getElementById(STYLE_ID);
