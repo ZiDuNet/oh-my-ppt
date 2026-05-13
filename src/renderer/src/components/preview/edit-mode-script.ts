@@ -1210,6 +1210,15 @@ export function buildEditModeInjectScript(previewScale = 1): string {
       console.log(LOG_PREFIX + JSON.stringify({ type: "exit" }));
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && selectedElement) {
+      const selector = buildStableSelector(selectedElement);
+      if (selector) {
+        console.log(LOG_PREFIX + JSON.stringify({ type: "delete-request", selector }));
+      }
+      event.preventDefault();
+      event.stopPropagation();
     }
   };
 

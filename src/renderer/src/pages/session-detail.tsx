@@ -16,6 +16,14 @@ import {
   DialogHeader,
   DialogTitle
 } from '../components/ui/Dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle
+} from '../components/ui/AlertDialog'
 import { MessagePanel } from '../components/session-detail/MessagePanel'
 import { PageSidebar } from '../components/session-detail/PageSidebar'
 import { PreviewStage } from '../components/session-detail/PreviewStage'
@@ -138,6 +146,8 @@ export function SessionDetailPage(): React.JSX.Element {
   const [historyRollbackId, setHistoryRollbackId] = useState<string | null>(null)
   const [rollbackConfirmVersion, setRollbackConfirmVersion] = useState<HistoryVersion | null>(null)
   const [deleteConfirmPage, setDeleteConfirmPage] = useState<SessionPreviewPage | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [pendingDeleteSelector, setPendingDeleteSelector] = useState<string | null>(null)
   const previewIframeRef = useRef<PreviewIframeHandle | null>(null)
   const sendingMessageRef = useRef(false)
   const [addPageInput, setAddPageInput] = useState('')
@@ -985,6 +995,23 @@ export function SessionDetailPage(): React.JSX.Element {
     setTextDraft(EMPTY_ELEMENT_DRAFT)
   }
 
+  const handleDeleteBySelector = (selector: string): void => {
+    if (!selectedPage?.htmlPath || !selectedPage.pageId || !selector) return
+    // Commit any pending text edit for the element being deleted
+    if (textSelection && textSelection.selector === selector) {
+      commitCurrentTextEdit()
+    }
+    editHistory.addDelete({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      selector
+    })
+    previewIframeRef.current?.hideElement(selector)
+    previewIframeRef.current?.clearEditModeSelection()
+    setTextSelection(null)
+    setTextDraft(EMPTY_ELEMENT_DRAFT)
+  }
+
   const handleElementSelected = (payload: EditSelectionPayload): void => {
     // Commit previous edit before switching to new element
     commitCurrentTextEdit()
@@ -1148,7 +1175,9 @@ export function SessionDetailPage(): React.JSX.Element {
 
   return (
     <TooltipProvider delayDuration={180}>
-      <div className="flex h-full min-h-0 flex-col bg-[#f5f1e8] text-foreground">
+      <div
+        className="flex h-full min-h-0 flex-col bg-[#f5f1e8] text-foreground outline-none"
+      >
         <header className="app-drag-region app-titlebar relative shrink-0 bg-[#f5f1e8]/95 shadow-[0_10px_26px_rgba(93,107,77,0.055)] backdrop-blur-xl">
           <div className="absolute left-0 top-0 h-full w-[220px] bg-[#f5f1e8]" />
           <div
@@ -1225,6 +1254,10 @@ export function SessionDetailPage(): React.JSX.Element {
             onDiscardAllEdits={handleDiscardAllEdits}
             onAddFromLibrary={(type) => setAssetPickerOpen(true, type)}
             onAddFromLocal={(type) => void handleUploadAndAdd(type)}
+            onDeleteRequest={(selector) => {
+              setPendingDeleteSelector(selector)
+              setDeleteConfirmOpen(true)
+            }}
           />
 
           {interactionMode === 'edit' && textSelection && (
@@ -1508,6 +1541,37 @@ export function SessionDetailPage(): React.JSX.Element {
           onClose={() => setAssetPickerOpen(false)}
           onConfirm={handleAddElement}
         />
+        <AlertDialog
+          open={deleteConfirmOpen}
+          onOpenChange={(open) => {
+            setDeleteConfirmOpen(open)
+            if (!open) setPendingDeleteSelector(null)
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogTitle>{t('sessionDetail.deleteElement')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('sessionDetail.deleteElementConfirm')}
+            </AlertDialogDescription>
+            <div className="flex justify-end gap-2">
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-[#c0392b] text-white hover:bg-[#a93226]"
+                onClick={() => {
+                  if (pendingDeleteSelector) {
+                    handleDeleteBySelector(pendingDeleteSelector)
+                  } else {
+                    handleDeleteElement()
+                  }
+                  setPendingDeleteSelector(null)
+                  setDeleteConfirmOpen(false)
+                }}
+              >
+                {t('common.delete')}
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </TooltipProvider>
   )

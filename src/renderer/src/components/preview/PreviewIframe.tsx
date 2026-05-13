@@ -59,6 +59,7 @@ export const PreviewIframe = forwardRef<
     onElementSelected?: (payload: EditSelectionPayload) => void
     onInspectExit?: () => void
     onDidReload?: () => void
+    onDeleteRequest?: (selector: string) => void
   }
 >(function PreviewIframe(
   {
@@ -73,7 +74,8 @@ export const PreviewIframe = forwardRef<
     onElementMoved,
     onElementSelected,
     onInspectExit,
-    onDidReload
+    onDidReload,
+    onDeleteRequest
   },
   ref
 ) {
@@ -358,6 +360,8 @@ export const PreviewIframe = forwardRef<
   onElementSelectedRef.current = onElementSelected
   const onInspectExitRef = useRef(onInspectExit)
   onInspectExitRef.current = onInspectExit
+  const onDeleteRequestRef = useRef(onDeleteRequest)
+  onDeleteRequestRef.current = onDeleteRequest
   useEffect(() => {
     const webview = webviewElement
     if (!webview || !inspectable) return
@@ -518,6 +522,11 @@ export const PreviewIframe = forwardRef<
         if (parsed.type === 'exit') {
           onInspectExitRef.current?.()
         }
+
+        // Edit mode: keyboard delete request
+        if (isEditModeMessage && parsed.type === 'delete-request' && parsed.selector) {
+          onDeleteRequestRef.current?.(parsed.selector)
+        }
       } catch {
         // ignore parse error
       }
@@ -563,6 +572,7 @@ export const PreviewIframe = forwardRef<
         <webview
           ref={handleWebviewRef}
           src={webviewSrc}
+          tabIndex={0}
           title={title}
           className={`absolute left-0 top-0 h-[900px] w-[1600px] origin-top-left ${
             pointerEnabled ? 'pointer-events-auto' : 'pointer-events-none'

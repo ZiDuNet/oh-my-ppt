@@ -38,6 +38,7 @@ export const PreviewStage = forwardRef<
     onDiscardAllEdits: () => void
     onAddFromLibrary?: (type: 'image' | 'video') => void
     onAddFromLocal?: (type: 'image' | 'video') => void
+    onDeleteRequest?: (selector: string) => void
   }
 >(function PreviewStage(
   {
@@ -59,7 +60,8 @@ export const PreviewStage = forwardRef<
     onSaveAllEdits,
     onDiscardAllEdits,
     onAddFromLibrary,
-    onAddFromLocal
+    onAddFromLocal,
+    onDeleteRequest
   },
   ref
 ) {
@@ -126,6 +128,7 @@ export const PreviewStage = forwardRef<
                 onCancelTextEdit()
               }}
               onDidReload={onReplayPendingEdits}
+              onDeleteRequest={onDeleteRequest}
             />
             {/* Top-left toolbar: undo/redo in edit mode */}
             {selectedPage.htmlPath && interactionMode === 'edit' && (
