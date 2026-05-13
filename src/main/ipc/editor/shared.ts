@@ -1,0 +1,424 @@
+import * as cheerio from 'cheerio'
+import { nanoid } from 'nanoid'
+import type { AnyNode } from 'domhandler'
+
+// ─── 共享锁 ───────────────────────────────────────────────
+
+const htmlWriteLocks = new Map<string, Promise<void>>()
+
+export async function withHtmlFileLock<T>(htmlPath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = htmlWriteLocks.get(htmlPath) || Promise.resolve()
+  const run = previous.then(fn, fn)
+  const next = run.then(
+    () => undefined,
+    () => undefined
+  )
+  htmlWriteLocks.set(htmlPath, next)
+  return run.finally(() => {
+    if (htmlWriteLocks.get(htmlPath) === next) {
+      htmlWriteLocks.delete(htmlPath)
+    }
+  })
+}
+
+// ─── 常量 ─────────────────────────────────────────────────
+
+export const INLINE_TAGS = new Set([
+  'a',
+  'abbr',
+  'b',
+  'code',
+  'em',
+  'i',
+  'label',
+  'small',
+  'span',
+  'strong',
+  'sub',
+  'sup'
+])
+
+export const EDITABLE_TEXT_TAGS = new Set([
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'p',
+  'ul',
+  'ol',
+  'li',
+  'span',
+  'strong',
+  'em',
+  'b',
+  'i',
+  'u',
+  's',
+  'small',
+  'label',
+  'button',
+  'td',
+  'th',
+  'blockquote',
+  'figcaption',
+  'sub',
+  'sup'
+])
+export const EDITABLE_TEXT_CHILD_TAGS = new Set([...EDITABLE_TEXT_TAGS, 'br'])
+
+export const SCAFFOLD_BLOCK_IDS = new Set(['content', 'page', 'root'])
+export const BLOCKED_TAGS = new Set([
+  'html',
+  'head',
+  'body',
+  'script',
+  'style',
+  'link',
+  'meta',
+  'title'
+])
+
+// ─── 通用工具函数 ──────────────────────────────────────────
+
+export function parseStyle(style: string): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const rawDeclaration of style.split(';')) {
+    const declaration = rawDeclaration.trim()
+    if (!declaration) continue
+    const separatorIndex = declaration.indexOf(':')
+    if (separatorIndex < 0) continue
+    const key = declaration.slice(0, separatorIndex).trim()
+    const value = declaration.slice(separatorIndex + 1).trim()
+    if (!key || !value) continue
+    map.set(key, value)
+  }
+  return map
+}
+
+export function serializeStyle(styleMap: Map<string, string>): string {
+  return Array.from(styleMap.entries())
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('; ')
+}
+
+export function clampDragValue(value: unknown): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 0
+  return Math.max(-1600, Math.min(1600, Math.round(parsed * 10) / 10))
+}
+
+export function clampSizeValue(value: unknown): number | null {
+  if (value === undefined || value === null) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return Math.max(1, Math.min(3200, Math.round(parsed * 10) / 10))
+}
+
+export interface ChildStyleUpdate {
+  path: number[]
+  width: number | null
+  height: number | null
+}
+
+export function normalizeChildStyleUpdates(value: unknown): ChildStyleUpdate[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item): ChildStyleUpdate | null => {
+      if (!item || typeof item !== 'object') return null
+      const record = item as { path?: unknown; width?: unknown; height?: unknown }
+      if (!Array.isArray(record.path) || record.path.length === 0 || record.path.length > 12)
+        return null
+      const path = record.path
+        .map((part) => Number(part))
+        .filter((part) => Number.isInteger(part) && part >= 0 && part <= 200)
+      if (path.length !== record.path.length) return null
+      const width = clampSizeValue(record.width)
+      const height = clampSizeValue(record.height)
+      if (width === null && height === null) return null
+      return { path, width, height }
+    })
+    .filter((item): item is ChildStyleUpdate => item !== null)
+    .slice(0, 20)
+}
+
+export function normalizeText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function normalizeColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!text) return null
+  if (/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(text)) return text
+  if (/^rgba?\([\d\s.,%]+\)$/i.test(text)) return text
+  return null
+}
+
+export function normalizeFontSize(value: unknown): string | null {
+  const raw =
+    typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  const numberValue = Number(raw.replace(/px$/i, ''))
+  if (!Number.isFinite(numberValue)) return null
+  const clamped = Math.max(8, Math.min(160, Math.round(numberValue * 10) / 10))
+  return `${clamped}px`
+}
+
+export function normalizeFontWeight(value: unknown): string | null {
+  const raw =
+    typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  if (['normal', 'bold', 'lighter', 'bolder'].includes(raw)) return raw
+  const numberValue = Number(raw)
+  if (!Number.isFinite(numberValue)) return null
+  const clamped = Math.max(100, Math.min(900, Math.round(numberValue / 100) * 100))
+  return String(clamped)
+}
+
+export const attrEscape = (value: string): string => value.replace(/"/g, '\\"')
+
+export const stableSelectorFor = (pageId: string, blockId: string): string =>
+  `body[data-page-id="${attrEscape(pageId)}"] [data-block-id="${attrEscape(blockId)}"]`
+
+export function allocateBlockId(): string {
+  return 'select-arcsin1-' + nanoid(8)
+}
+
+export function assertAnchorableElement(target: cheerio.Cheerio<AnyNode>): void {
+  const node = target.get(0)
+  const tagName = String((node as { tagName?: string })?.tagName || '').toLowerCase()
+  if (!tagName || BLOCKED_TAGS.has(tagName)) {
+    throw new Error(`当前元素不能锚定：<${tagName || 'unknown'}>`)
+  }
+  const role = (target.attr('data-role') || '').trim()
+  const blockId = (target.attr('data-block-id') || '').trim()
+  const classRaw = target.attr('class') || ''
+  const guardRoot = target.attr('data-ppt-guard-root') === '1'
+  if (
+    role === 'content' ||
+    SCAFFOLD_BLOCK_IDS.has(blockId) ||
+    guardRoot ||
+    /\bppt-page-(?:root|content|fit-scope)\b/.test(classRaw)
+  ) {
+    throw new Error('页面骨架元素不能锚定，请选择页面内容里的具体元素')
+  }
+}
+
+// ─── Patch 函数 ────────────────────────────────────────────
+
+export function patchDraggedElementStyle(
+  html: string,
+  selector: string,
+  x: number,
+  y: number,
+  width: number | null,
+  height: number | null,
+  childUpdates: ChildStyleUpdate[],
+  isAbsoluteMode: boolean,
+  zIndex?: number,
+  zIndexOnly?: boolean
+): string {
+  const $ = cheerio.load(html, { scriptingEnabled: false })
+  let target
+  try {
+    target = $(selector).first()
+  } catch {
+    return html
+  }
+  if (!target || target.length === 0) return html
+
+  const styleMap = parseStyle(target.attr('style') || '')
+
+  // zIndexOnly: only update z-index, leave everything else untouched
+  if (zIndexOnly && zIndex !== undefined) {
+    styleMap.set('z-index', String(zIndex))
+    target.attr('style', serializeStyle(styleMap))
+    return $.html()
+  }
+
+  const tagName = String(target.get(0)?.tagName || '').toLowerCase()
+  const effectiveZIndex = zIndex !== undefined ? String(zIndex) : undefined
+
+  if (isAbsoluteMode) {
+    styleMap.set('position', 'absolute')
+    styleMap.set('left', `${x}px`)
+    styleMap.set('top', `${y}px`)
+    if (width !== null) styleMap.set('width', `${width}px`)
+    if (height !== null) styleMap.set('height', `${height}px`)
+    if (effectiveZIndex !== undefined) {
+      styleMap.set('z-index', effectiveZIndex)
+    } else if (!styleMap.has('z-index')) {
+      styleMap.set('z-index', '10')
+    }
+    styleMap.delete('--ppt-drag-x')
+    styleMap.delete('--ppt-drag-y')
+    styleMap.delete('translate')
+    styleMap.delete('will-change')
+    target.attr('data-ppt-layout-converted', '1')
+  } else {
+    if (INLINE_TAGS.has(tagName) && !styleMap.has('display')) {
+      styleMap.set('display', 'inline-block')
+    }
+    const position = String(styleMap.get('position') || '').trim().toLowerCase()
+    if (!position || position === 'static') {
+      styleMap.set('position', 'relative')
+    }
+    if (effectiveZIndex !== undefined) {
+      styleMap.set('z-index', effectiveZIndex)
+    } else if (!styleMap.has('z-index')) {
+      styleMap.set('z-index', '10')
+    }
+    styleMap.set('--ppt-drag-x', `${x}px`)
+    styleMap.set('--ppt-drag-y', `${y}px`)
+    styleMap.set('translate', 'var(--ppt-drag-x, 0px) var(--ppt-drag-y, 0px)')
+    if (width !== null) styleMap.set('width', `${width}px`)
+    if (height !== null) styleMap.set('height', `${height}px`)
+    styleMap.delete('will-change')
+  }
+  target.attr('style', serializeStyle(styleMap))
+
+  for (const childUpdate of childUpdates) {
+    let child = target
+    for (const index of childUpdate.path) {
+      child = child.children().eq(index)
+      if (!child || child.length === 0) break
+    }
+    if (!child || child.length === 0) continue
+    const childStyleMap = parseStyle(child.attr('style') || '')
+    if (childUpdate.width !== null) childStyleMap.set('width', `${childUpdate.width}px`)
+    if (childUpdate.height !== null) childStyleMap.set('height', `${childUpdate.height}px`)
+    child.attr('style', serializeStyle(childStyleMap))
+  }
+
+  return $.html()
+}
+
+export function hasOnlyEditableTextChildren(
+  $: cheerio.CheerioAPI,
+  target: cheerio.Cheerio<AnyNode>
+): boolean {
+  return target
+    .children()
+    .toArray()
+    .every((child) => {
+      const childTagName = String(child.tagName || '').toLowerCase()
+      if (!childTagName || !EDITABLE_TEXT_CHILD_TAGS.has(childTagName)) return false
+      const childElement = $(child)
+      return hasOnlyEditableTextChildren($, childElement)
+    })
+}
+
+export function patchElementProperties(
+  html: string,
+  selector: string,
+  patch: {
+    text?: string
+    style?: {
+      color?: string
+      fontSize?: string
+      fontWeight?: string
+    }
+  }
+): string {
+  const $ = cheerio.load(html, { scriptingEnabled: false })
+  let target: cheerio.Cheerio<AnyNode>
+  try {
+    target = $(selector).first()
+  } catch {
+    return html
+  }
+  if (!target || target.length === 0) return html
+
+  const node = target.get(0) as { tagName?: string } | undefined
+  const tagName = String(node?.tagName || '').toLowerCase()
+  const hasRole = Boolean(target.attr('data-role'))
+  const hasBlockId = Boolean(target.attr('data-block-id'))
+  if (!EDITABLE_TEXT_TAGS.has(tagName) && !hasRole && !hasBlockId) {
+    throw new Error(`当前元素暂不支持直接编辑文字：<${tagName || 'unknown'}>`)
+  }
+  if (!hasOnlyEditableTextChildren($, target)) {
+    throw new Error('当前元素包含非文本子元素，暂不支持直接编辑；可以选择更内层的文字。')
+  }
+
+  if (typeof patch.text === 'string') {
+    const text = normalizeText(patch.text)
+    if (!text) throw new Error('文字不能为空')
+    if (text.length > 500) throw new Error('文字不能超过 500 个字符')
+    target.text(text)
+  }
+
+  const stylePatch = patch.style || {}
+  const styleMap = parseStyle(target.attr('style') || '')
+  const color = normalizeColor(stylePatch.color)
+  const fontSize = normalizeFontSize(stylePatch.fontSize)
+  const fontWeight = normalizeFontWeight(stylePatch.fontWeight)
+  if (color) styleMap.set('color', color)
+  if (fontSize) styleMap.set('font-size', fontSize)
+  if (fontWeight) styleMap.set('font-weight', fontWeight)
+  if (color || fontSize || fontWeight) {
+    target.attr('style', serializeStyle(styleMap))
+  }
+
+  return $.html()
+}
+
+export function ensureElementAnchorInHtml(
+  html: string,
+  args: {
+    pageId: string
+    selector: string
+    elementTag?: string
+  }
+): { html: string; selector: string; blockId: string; changed: boolean } {
+  const $ = cheerio.load(html, { scriptingEnabled: false })
+  let target: cheerio.Cheerio<AnyNode>
+  try {
+    target = $(args.selector).first()
+  } catch {
+    throw new Error('无法锚定元素：selector 无效')
+  }
+  if (!target || target.length === 0) {
+    throw new Error('无法锚定元素：页面内容可能已经变化')
+  }
+  assertAnchorableElement(target)
+  const existingBlockId = (target.attr('data-block-id') || '').trim()
+  if (existingBlockId) {
+    return {
+      html,
+      selector: stableSelectorFor(args.pageId, existingBlockId),
+      blockId: existingBlockId,
+      changed: false
+    }
+  }
+  const blockId = allocateBlockId()
+  target.attr('data-block-id', blockId)
+  return {
+    html: $.html(),
+    selector: stableSelectorFor(args.pageId, blockId),
+    blockId,
+    changed: true
+  }
+}
+
+export function patchAddElement(
+  html: string,
+  parentSelector: string,
+  htmlFragment: string,
+  insertIndex: number
+): string {
+  const $ = cheerio.load(html, { scriptingEnabled: false })
+  const parent = $(parentSelector).first()
+  if (!parent || parent.length === 0) {
+    throw new Error('插入目标父元素不存在')
+  }
+  if (insertIndex < 0 || insertIndex >= parent.children().length) {
+    parent.append(htmlFragment)
+  } else {
+    parent.children().eq(insertIndex).before(htmlFragment)
+  }
+  return $.html()
+}

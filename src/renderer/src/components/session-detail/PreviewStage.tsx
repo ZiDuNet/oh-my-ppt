@@ -1,15 +1,18 @@
-import { useEffect, useState, forwardRef } from 'react'
-import { Check, Loader2, Pencil, Sparkles } from 'lucide-react'
+import { useEffect, forwardRef } from 'react'
+import { ChevronDown, Check, ImagePlus, Loader2, Pencil, Redo2, Sparkles, Undo2, Video } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { useSessionDetailUiStore } from '@renderer/store/sessionDetailStore'
 import { useToastStore } from '@renderer/store/toastStore'
 import { Button } from '../ui/Button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '../ui/DropdownMenu'
 import { PreviewIframe, type PreviewIframeHandle } from '../preview/PreviewIframe'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/Tooltip'
-import type { DragEditorMovePayload } from '../preview/drag-editor-script'
-import type { TextEditorSelectionPayload } from '../preview/text-editor-types'
-import { ElementInspectorPanel, type ElementEditDraft } from './ElementInspectorPanel'
-import type { InspectorPanelPosition } from './ElementInspectorPanel'
+import type { EditModeMovePayload, EditSelectionPayload } from '../preview/edit-mode-script'
 import type { SessionPreviewPage } from './types'
 import { useT } from '@renderer/i18n'
 
@@ -21,16 +24,21 @@ export const PreviewStage = forwardRef<
     isGenerating: boolean
     progressLabel?: string
     previewRefreshKey?: number
-    pendingEditCount?: number
     isSavingEdits?: boolean
-    textSelection: TextEditorSelectionPayload | null
-    textDraft: ElementEditDraft
-    onTextDraftChange: (draft: ElementEditDraft) => void
-    onElementMoved: (payload: DragEditorMovePayload) => void
-    onTextSelected: (payload: TextEditorSelectionPayload) => void
+    canUndo: boolean
+    canRedo: boolean
+    hasPendingEdits: boolean
+    onElementMoved: (payload: EditModeMovePayload) => void
+    onElementSelected: (payload: EditSelectionPayload) => void
     onCancelTextEdit: () => void
+    onUndo: () => void
+    onRedo: () => void
+    onReplayPendingEdits: () => void
     onSaveAllEdits: () => void
     onDiscardAllEdits: () => void
+    onAddFromLibrary?: (type: 'image' | 'video') => void
+    onAddFromLocal?: (type: 'image' | 'video') => void
+    onDeleteRequest?: (selector: string) => void
   }
 >(function PreviewStage(
   {
@@ -39,16 +47,21 @@ export const PreviewStage = forwardRef<
     isGenerating,
     progressLabel,
     previewRefreshKey = 0,
-    pendingEditCount = 0,
     isSavingEdits = false,
-    textSelection,
-    textDraft,
-    onTextDraftChange,
+    canUndo,
+    canRedo,
+    hasPendingEdits,
     onElementMoved,
-    onTextSelected,
+    onElementSelected,
     onCancelTextEdit,
+    onUndo,
+    onRedo,
+    onReplayPendingEdits,
     onSaveAllEdits,
-    onDiscardAllEdits
+    onDiscardAllEdits,
+    onAddFromLibrary,
+    onAddFromLocal,
+    onDeleteRequest
   },
   ref
 ) {
@@ -59,8 +72,6 @@ export const PreviewStage = forwardRef<
   const setInteractionMode = useSessionDetailUiStore((state) => state.setInteractionMode)
   const setSelectedElement = useSessionDetailUiStore((state) => state.setSelectedElement)
   const clearSelectedElement = useSessionDetailUiStore((state) => state.clearSelectedElement)
-  const [inspectorPanelPosition, setInspectorPanelPosition] =
-    useState<InspectorPanelPosition | null>(null)
   const displayTitle = sessionTitle || t('sessionDetail.sessionFallback')
 
   const isEditing = interactionMode === 'edit'
@@ -91,11 +102,11 @@ export const PreviewStage = forwardRef<
           <div className="relative h-full overflow-hidden rounded-[1.55rem] bg-[#f5f1e8] p-2 shadow-[0_14px_32px_rgba(93,107,77,0.14)]">
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="absolute left-5 top-5 z-20 max-w-[460px] truncate border-l-2 border-[#7f9468] bg-[#fffaf1]/68 px-3 py-1.5 text-sm font-medium leading-5 text-[#3e4a32] shadow-[0_8px_22px_rgba(74,59,42,0.08)] backdrop-blur-md">
+                <div className="absolute bottom-3 left-3 z-20 max-w-[460px] truncate border-l-2 border-[#7f9468] bg-[#fffaf1]/68 px-3 py-1.5 text-sm font-medium leading-5 text-[#3e4a32] shadow-[0_8px_22px_rgba(74,59,42,0.08)] backdrop-blur-md">
                   {displayTitle}
                 </div>
               </TooltipTrigger>
-              <TooltipContent side="bottom" align="start">
+              <TooltipContent side="top" align="start">
                 {displayTitle}
               </TooltipContent>
             </Tooltip>
@@ -108,16 +119,44 @@ export const PreviewStage = forwardRef<
               title={`preview-page-${selectedPage.pageNumber}`}
               inspectable
               inspecting={isInspecting}
-              dragEditing={isEditing}
-              textEditing={isEditing}
+              editMode={isEditing}
               onSelectorSelected={setSelectedElement}
               onElementMoved={onElementMoved}
-              onTextSelected={onTextSelected}
+              onElementSelected={onElementSelected}
               onInspectExit={() => {
                 setInteractionMode('preview')
                 onCancelTextEdit()
               }}
+              onDidReload={onReplayPendingEdits}
+              onDeleteRequest={onDeleteRequest}
             />
+            {/* Top-left toolbar: undo/redo in edit mode */}
+            {selectedPage.htmlPath && interactionMode === 'edit' && (
+              <div className="absolute left-4 top-3 z-20 flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 rounded-[7px] border-transparent bg-[#fffaf1]/90 px-2 text-[10px] leading-none text-[#59664b] shadow-[0_8px_20px_rgba(74,59,42,0.10)] hover:bg-[#d4e4c1]/78 disabled:opacity-40"
+                  onClick={onUndo}
+                  disabled={isGenerating || isSavingEdits || !canUndo}
+                >
+                  <Undo2 className="mr-0.5 h-2.5 w-2.5" />
+                  {t('sessionDetail.undo')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 rounded-[7px] border-transparent bg-[#fffaf1]/90 px-2 text-[10px] leading-none text-[#59664b] shadow-[0_8px_20px_rgba(74,59,42,0.10)] hover:bg-[#d4e4c1]/78 disabled:opacity-40"
+                  onClick={onRedo}
+                  disabled={isGenerating || isSavingEdits || !canRedo}
+                >
+                  <Redo2 className="mr-0.5 h-2.5 w-2.5" />
+                  {t('sessionDetail.redo')}
+                </Button>
+              </div>
+            )}
             {/* Top-right toolbar */}
             {selectedPage.htmlPath && (
               <div className="absolute right-4 top-3 z-20">
@@ -164,7 +203,51 @@ export const PreviewStage = forwardRef<
                 )}
                 {interactionMode === 'edit' && (
                   <div className="flex items-center gap-1.5">
-                    {pendingEditCount > 0 && (
+                    {onAddFromLibrary && onAddFromLocal && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 items-center gap-0.5 rounded-[7px] border-transparent bg-[#fffaf1]/90 px-2 text-[10px] font-semibold leading-none text-[#59664b] shadow-[0_8px_20px_rgba(74,59,42,0.10)] hover:bg-[#d4e4c1]/78"
+                          >
+                            <ImagePlus className="mr-0.5 h-2.5 w-2.5" />
+                            {t('editMode.addImage')}
+                            <ChevronDown className="ml-0.5 h-2.5 w-2.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[10rem]">
+                          <DropdownMenuItem onClick={() => onAddFromLibrary('image')}>
+                            {t('editMode.fromLibrary')}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onAddFromLocal('image')}>
+                            {t('editMode.fromLocal')}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                    {onAddFromLibrary && onAddFromLocal && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 items-center gap-0.5 rounded-[7px] border-transparent bg-[#fffaf1]/90 px-2 text-[10px] font-semibold leading-none text-[#59664b] shadow-[0_8px_20px_rgba(74,59,42,0.10)] hover:bg-[#d4e4c1]/78"
+                          >
+                            <Video className="mr-0.5 h-2.5 w-2.5" />
+                            {t('editMode.addVideo')}
+                            <ChevronDown className="ml-0.5 h-2.5 w-2.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[10rem]">
+                          <DropdownMenuItem onClick={() => onAddFromLibrary('video')}>
+                            {t('editMode.fromLibrary')}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onAddFromLocal('video')}>
+                            {t('editMode.fromLocal')}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                    {hasPendingEdits && (
                       <Button
                         type="button"
                         variant="default"
@@ -189,7 +272,7 @@ export const PreviewStage = forwardRef<
                       onClick={onDiscardAllEdits}
                       disabled={isGenerating || isSavingEdits}
                     >
-                      {t('sessionDetail.exitWithoutSaving')}
+                      {t('sessionDetail.exitEditMode')}
                     </Button>
                   </div>
                 )}
@@ -211,16 +294,6 @@ export const PreviewStage = forwardRef<
                   </div>
                 )}
               </div>
-            )}
-            {isEditing && textSelection && (
-              <ElementInspectorPanel
-                selection={textSelection}
-                draft={textDraft}
-                position={inspectorPanelPosition}
-                onDraftChange={onTextDraftChange}
-                onClose={onCancelTextEdit}
-                onPositionChange={setInspectorPanelPosition}
-              />
             )}
             {selectedPage.status === 'failed' && (
               <div className="absolute bottom-5 left-5 z-20 max-w-[520px] rounded-[1rem] bg-[#fff4ef]/92 px-3 py-2 text-xs text-[#8e5a53] shadow-[0_10px_24px_rgba(142,90,83,0.12)] backdrop-blur-sm">

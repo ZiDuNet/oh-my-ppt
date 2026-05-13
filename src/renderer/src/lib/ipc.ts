@@ -127,6 +127,7 @@ export interface UpdateElementLayoutPayload {
     width?: number
     height?: number
   }>
+  isAbsoluteMode?: boolean
 }
 
 export interface UpdateElementPropertiesPayload {
@@ -287,6 +288,10 @@ export const ipc = {
       assets: UploadedAsset[]
       cancelled?: boolean
     }>,
+  listAssets: (sessionId: string, assetType: 'image' | 'video') =>
+    getIpc().invoke('assets:list', { sessionId, assetType }) as Promise<{
+      assets: Array<{ fileName: string; relativePath: string; absolutePath: string }>
+    }>,
   exportPdf: (sessionId: string) =>
     getIpc().invoke('export:pdf', { sessionId }) as Promise<ExportDeckResult>,
   exportPng: (sessionId: string) =>
@@ -405,6 +410,32 @@ export const ipc = {
     getIpc().invoke('text-editor:update-element-properties', payload) as Promise<{
       success: boolean
     }>,
+  deleteElement: (payload: {
+    sessionId: string
+    htmlPath: string
+    pageId: string
+    selector: string
+  }) =>
+    getIpc().invoke('element-editor:delete-element', payload) as Promise<{
+      success: boolean
+    }>,
+  saveEditBatch: (payload: {
+    sessionId: string
+    htmlPath: string
+    pageId: string
+    dragEdits: unknown[]
+    textEdits: unknown[]
+    deletes?: unknown[]
+    addElements?: unknown[]
+    prompt?: string
+  }) =>
+    getIpc().invoke('edit:save-batch', payload) as Promise<{
+      success: boolean
+      dragCount: number
+      textCount: number
+      deleteCount: number
+      addCount: number
+    }>,
   openFile: (filePath: string, sessionId?: string) =>
     getIpc().invoke('file:open', { path: filePath, sessionId }) as Promise<string>,
   revealFile: (filePath: string, sessionId?: string) =>
@@ -438,5 +469,7 @@ export const ipc = {
   getAppVersion: () =>
     getIpc().invoke('app:getVersion') as Promise<{
       version: string
-    }>
+    }>,
+  openPresentation: (payload: { sessionId: string; startIndex?: number }) =>
+    getIpc().invoke('presentation:open', payload) as Promise<{ success: boolean }>
 }

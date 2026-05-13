@@ -1,8 +1,16 @@
-import { GripHorizontal, X } from 'lucide-react'
-import { useRef, type PointerEvent } from 'react'
+import { Copy, Layers, Trash2, X } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from '../ui/AlertDialog'
 import { Input, Textarea } from '../ui/Input'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '../ui/Select'
-import type { TextEditorSelectionPayload } from '../preview/text-editor-types'
+import type { EditSelectionPayload } from '../preview/edit-mode-script'
 import { useT } from '@renderer/i18n'
 
 export interface ElementEditDraft {
@@ -10,183 +18,256 @@ export interface ElementEditDraft {
   color: string
   fontSize: string
   fontWeight: string
+  layoutX: string
+  layoutY: string
+  layoutWidth: string
+  layoutHeight: string
+  layoutZIndex: string
 }
 
-export interface InspectorPanelPosition {
-  x: number
-  y: number
+const LAYOUT_FIELDS: Array<{ key: keyof ElementEditDraft; label: string }> = [
+  { key: 'layoutX', label: 'X' },
+  { key: 'layoutY', label: 'Y' },
+  { key: 'layoutWidth', label: 'W' },
+  { key: 'layoutHeight', label: 'H' }
+]
+
+const MEDIA_TAGS = new Set(['img', 'video', 'canvas'])
+
+function isMediaElement(selection: EditSelectionPayload | null): boolean {
+  if (!selection) return false
+  const tag = (selection.elementTag || '').toLowerCase()
+  return MEDIA_TAGS.has(tag)
 }
 
 export function ElementInspectorPanel({
   selection,
   draft,
-  position,
   onDraftChange,
   onClose,
-  onPositionChange
+  onCopy,
+  onDelete
 }: {
-  selection: TextEditorSelectionPayload | null
+  selection: EditSelectionPayload | null
   draft: ElementEditDraft
-  position: InspectorPanelPosition | null
   onDraftChange: (draft: ElementEditDraft) => void
   onClose: () => void
-  onPositionChange: (position: InspectorPanelPosition) => void
+  onDelete?: () => void
+  onCopy?: () => void
 }): React.JSX.Element {
   const t = useT()
-  const panelRef = useRef<HTMLDivElement | null>(null)
-  const dragStateRef = useRef<{
-    pointerId: number
-    startX: number
-    startY: number
-    panelX: number
-    panelY: number
-  } | null>(null)
-
-  const clampPanelPosition = (x: number, y: number): InspectorPanelPosition => {
-    const panel = panelRef.current
-    const parent = panel?.parentElement
-    const parentWidth = parent?.clientWidth || 0
-    const parentHeight = parent?.clientHeight || 0
-    const panelWidth = panel?.offsetWidth || 360
-    const panelHeight = panel?.offsetHeight || 420
-    return {
-      x: Math.max(12, Math.min(Math.max(12, parentWidth - panelWidth - 12), x)),
-      y: Math.max(12, Math.min(Math.max(12, parentHeight - panelHeight - 12), y))
-    }
-  }
-
-  const beginDrag = (event: PointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return
-    const panel = panelRef.current
-    if (!panel) return
-    const current = position ?? { x: panel.offsetLeft, y: panel.offsetTop }
-    dragStateRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      panelX: current.x,
-      panelY: current.y
-    }
-    event.currentTarget.setPointerCapture(event.pointerId)
-    event.preventDefault()
-  }
-
-  const moveDrag = (event: PointerEvent<HTMLDivElement>): void => {
-    const state = dragStateRef.current
-    if (!state || state.pointerId !== event.pointerId) return
-    onPositionChange(
-      clampPanelPosition(
-        state.panelX + event.clientX - state.startX,
-        state.panelY + event.clientY - state.startY
-      )
-    )
-  }
-
-  const endDrag = (event: PointerEvent<HTMLDivElement>): void => {
-    const state = dragStateRef.current
-    if (!state || state.pointerId !== event.pointerId) return
-    dragStateRef.current = null
-    event.currentTarget.releasePointerCapture(event.pointerId)
-  }
+  const isText = selection?.isText ?? false
 
   return (
-    <div
-      ref={panelRef}
-      className="absolute z-30 w-[min(360px,calc(100%-40px))] overflow-hidden rounded-[16px] border border-[#d9cfbd]/72 bg-[#fffaf1]/94 shadow-[0_20px_48px_rgba(74,59,42,0.2)] backdrop-blur-xl"
-      style={position ? { left: position.x, top: position.y } : { right: 20, bottom: 80 }}
-    >
-      <div
-        className="flex cursor-move touch-none items-center justify-between border-b border-[#dfd2bd]/70 px-3.5 py-3"
-        onPointerDown={beginDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-[#7a875f]">
-            <GripHorizontal className="h-3.5 w-3.5" />
+    <div className="flex h-full w-[260px] shrink-0 flex-col overflow-hidden rounded-[2rem] border border-[#ded2bd]/60 bg-[#f3ecdf]/76 shadow-[0_20px_44px_rgba(74,59,42,0.13)] backdrop-blur-xl">
+      {/* Header */}
+      <div className="relative mx-2.5 mt-2.5 overflow-hidden rounded-[1.35rem] border border-[#e1d6c4]/72 bg-[#fffaf1]/78 px-3 pb-2.5 pt-3 shadow-[0_6px_16px_rgba(77,61,43,0.08)]">
+        <div className="pointer-events-none absolute -right-6 -top-8 h-24 w-24 rounded-[30%_70%_70%_30%/30%_30%_70%_70%] bg-[#c7d9b4]/12" />
+        <div className="relative flex items-center justify-between">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7a875f]">
             {t('sessionDetail.elementInspector')}
           </div>
-          <div className="mt-0.5 truncate text-sm font-semibold text-[#34402c]">{`<${selection?.elementTag || 'text'}>`}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#667257] transition-colors hover:bg-[#d4e4c1]/80 hover:text-[#34402c]"
+            aria-label={t('sessionDetail.closeInspector')}
+            title={t('sessionDetail.closeInspector')}
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        <button
-          type="button"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={onClose}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#667257] transition-colors hover:bg-[#e8e0d0]/80 hover:text-[#34402c]"
-          aria-label={t('sessionDetail.closeInspector')}
-          title={t('sessionDetail.closeInspector')}
-        >
-          <X className="h-4 w-4" />
-        </button>
       </div>
 
-      <div className="space-y-3 px-3.5 py-3.5">
-        <label className="block space-y-1.5">
-          <span className="text-xs font-medium text-[#657058]">
-            {t('sessionDetail.textContent')}
+      {/* Content */}
+      <div className="flex-1 space-y-2.5 overflow-y-auto px-2.5 py-2.5">
+        {/* Layout display */}
+        <div className="rounded-[1.15rem] border border-[#ded2bd]/72 bg-[#fffaf1]/82 px-3 py-2.5 shadow-[0_6px_14px_rgba(74,59,42,0.08)]">
+          <span className="text-[11px] font-medium text-[#7a875f]">
+            {t('sessionDetail.adjustLayout')}
           </span>
-          <Textarea
-            value={draft.text}
-            onChange={(event) => onDraftChange({ ...draft, text: event.target.value })}
-            rows={5}
-            className="min-h-[136px] resize-none rounded-[12px] border-[#d7cbb7]/80 bg-[#fffdf8]/92 text-[15px] leading-6"
-          />
-        </label>
-
-        <div className="grid grid-cols-[1fr_104px] gap-2.5">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-[#657058]">
-              {t('sessionDetail.textColor')}
-            </span>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={draft.color || '#34402c'}
-                onChange={(event) => onDraftChange({ ...draft, color: event.target.value })}
-                className="h-9 w-11 shrink-0 cursor-pointer rounded-[9px] border border-[#d7cbb7]/80 bg-transparent p-1"
-                aria-label={t('sessionDetail.textColor')}
-              />
-              <Input
-                value={draft.color}
-                onChange={(event) => onDraftChange({ ...draft, color: event.target.value })}
-                className="h-9 rounded-[10px] px-2.5 text-xs"
-              />
-            </div>
-          </label>
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-[#657058]">
-              {t('sessionDetail.fontSize')}
-            </span>
-            <Input
-              type="number"
-              min={8}
-              max={160}
-              value={draft.fontSize}
-              onChange={(event) => onDraftChange({ ...draft, fontSize: event.target.value })}
-              className="h-9 rounded-[10px] px-2.5 text-xs"
-            />
-          </label>
+          <div className="mt-2 grid grid-cols-4 gap-2">
+            {LAYOUT_FIELDS.map(({ key, label }) => (
+              <div key={key} className="space-y-1 text-center">
+                <span className="text-[11px] font-medium text-[#7a875f]">{label}</span>
+                <div className="flex h-8 items-center justify-center rounded-full border border-[#d7cbb7]/40 bg-[#f5efe4]/40 px-1.5 text-[11px] text-[#a0977e]/70">
+                  {draft[key]}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <label className="block space-y-1.5">
-          <span className="text-xs font-medium text-[#657058]">
-            {t('sessionDetail.fontWeight')}
-          </span>
-          <Select value={draft.fontWeight} onValueChange={(value) => onDraftChange({ ...draft, fontWeight: value })}>
-            <SelectTrigger className="h-9 rounded-[10px] border-[#d7cbb7]/80 bg-[#fffdf8]/92 px-2.5 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="300">300</SelectItem>
-              <SelectItem value="400">400</SelectItem>
-              <SelectItem value="500">500</SelectItem>
-              <SelectItem value="600">600</SelectItem>
-              <SelectItem value="700">700</SelectItem>
-              <SelectItem value="800">800</SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
+        {/* Z-Index control for image/video elements */}
+        {isMediaElement(selection) && (
+          <div className="rounded-[1.15rem] border border-[#ded2bd]/72 bg-[#fffaf1]/82 px-3 py-2.5 shadow-[0_6px_14px_rgba(74,59,42,0.08)]">
+            <div className="flex items-center gap-1.5">
+              <Layers className="h-3.5 w-3.5 text-[#7a875f]" />
+              <span className="text-[11px] font-medium text-[#7a875f]">
+                {t('sessionDetail.zIndex')}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d7cbb7]/40 bg-[#f5efe4]/40 text-[13px] font-medium text-[#59664b] transition-colors hover:bg-[#d4e4c1]/60"
+                onClick={() => {
+                  const current = parseInt(draft.layoutZIndex || '0', 10) || 0
+                  onDraftChange({ ...draft, layoutZIndex: String(Math.max(0, current - 1)) })
+                }}
+              >
+                -
+              </button>
+              <Input
+                type="number"
+                min={0}
+                max={9999}
+                value={draft.layoutZIndex}
+                onChange={(event) => onDraftChange({ ...draft, layoutZIndex: event.target.value })}
+                className="h-8 flex-1 rounded-full border border-[#ded2bd]/72 bg-[#fffdf8]/88 px-2.5 text-center text-xs text-[#3f4b35] shadow-[inset_0_1px_2px_rgba(74,59,42,0.05)] focus-visible:border-[#9bb98a] focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+              <button
+                type="button"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#d7cbb7]/40 bg-[#f5efe4]/40 text-[13px] font-medium text-[#59664b] transition-colors hover:bg-[#d4e4c1]/60"
+                onClick={() => {
+                  const current = parseInt(draft.layoutZIndex || '0', 10) || 0
+                  onDraftChange({ ...draft, layoutZIndex: String(Math.min(9999, current + 1)) })
+                }}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Text editing (only for text elements) */}
+        {!isText && !isMediaElement(selection) && (
+          <div className="rounded-[1.15rem] border border-[#e8c8c6]/72 bg-[#fdf0ef]/82 px-3 py-4 text-center shadow-[0_6px_14px_rgba(74,59,42,0.08)]">
+            <p className="whitespace-pre-line text-[12px] leading-5 text-[#8e5a53]">
+              {t('sessionDetail.nonTextElementHint')}
+            </p>
+          </div>
+        )}
+        {isText && (
+          <>
+            <div className="rounded-[1.15rem] border border-[#ded2bd]/72 bg-[#fffaf1]/82 px-3 py-2.5 shadow-[0_6px_14px_rgba(74,59,42,0.08)]">
+              <label className="block space-y-1.5">
+                <span className="text-[11px] font-medium text-[#7a875f]">
+                  {t('sessionDetail.textContent')}
+                </span>
+                <Textarea
+                  value={draft.text}
+                  onChange={(event) => onDraftChange({ ...draft, text: event.target.value })}
+                  rows={5}
+                  className="min-h-[120px] resize-none rounded-[1rem] border border-[#ded2bd]/72 bg-[#fffdf8]/88 px-3 py-2 text-[13px] leading-5 text-[#3f4b35] shadow-[inset_0_1px_2px_rgba(74,59,42,0.05)] focus-visible:border-[#9bb98a] focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+              </label>
+            </div>
+
+            <div className="rounded-[1.15rem] border border-[#ded2bd]/72 bg-[#fffaf1]/82 px-3 py-2.5 shadow-[0_6px_14px_rgba(74,59,42,0.08)]">
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-[1fr_88px] gap-2.5">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] font-medium text-[#7a875f]">
+                      {t('sessionDetail.textColor')}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={draft.color || '#34402c'}
+                        onChange={(event) => onDraftChange({ ...draft, color: event.target.value })}
+                        className="h-8 w-10 shrink-0 cursor-pointer rounded-full border border-[#d7cbb7]/70 bg-transparent p-1"
+                        aria-label={t('sessionDetail.textColor')}
+                      />
+                      <Input
+                        value={draft.color}
+                        onChange={(event) => onDraftChange({ ...draft, color: event.target.value })}
+                        className="h-8 rounded-full border border-[#ded2bd]/72 bg-[#fffdf8]/88 px-2.5 text-xs text-[#3f4b35] shadow-[inset_0_1px_2px_rgba(74,59,42,0.05)] focus-visible:border-[#9bb98a] focus-visible:ring-0 focus-visible:ring-offset-0"
+                      />
+                    </div>
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] font-medium text-[#7a875f]">
+                      {t('sessionDetail.fontSize')}
+                    </span>
+                    <Input
+                      type="number"
+                      min={8}
+                      max={160}
+                      value={draft.fontSize}
+                      onChange={(event) => onDraftChange({ ...draft, fontSize: event.target.value })}
+                      className="h-8 rounded-full border border-[#ded2bd]/72 bg-[#fffdf8]/88 px-2.5 text-xs text-[#3f4b35] shadow-[inset_0_1px_2px_rgba(74,59,42,0.05)] focus-visible:border-[#9bb98a] focus-visible:ring-0 focus-visible:ring-offset-0"
+                    />
+                  </label>
+                </div>
+
+                <label className="block space-y-1.5">
+                  <span className="text-[11px] font-medium text-[#7a875f]">
+                    {t('sessionDetail.fontWeight')}
+                  </span>
+                  <Select
+                    value={draft.fontWeight}
+                    onValueChange={(value) => onDraftChange({ ...draft, fontWeight: value })}
+                  >
+                    <SelectTrigger className="h-8 rounded-full border-[#ded2bd]/72 bg-[#fffdf8]/88 px-2.5 text-xs text-[#3f4b35] shadow-[inset_0_1px_2px_rgba(74,59,42,0.05)] focus-visible:border-[#9bb98a]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="300">300</SelectItem>
+                      <SelectItem value="400">400</SelectItem>
+                      <SelectItem value="500">500</SelectItem>
+                      <SelectItem value="600">600</SelectItem>
+                      <SelectItem value="700">700</SelectItem>
+                      <SelectItem value="800">800</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Copy & Delete buttons */}
+        <div className="flex gap-2 px-0.5 pb-1 pt-1">
+          {onCopy && (
+            <button
+              type="button"
+              className="flex flex-1 h-8 items-center justify-center gap-1.5 rounded-full border border-[#d7cbb7]/40 bg-[#fffdf8]/60 text-xs font-medium text-[#59664b] transition-colors hover:bg-[#d4e4c1]/60"
+              onClick={onCopy}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {t('sessionDetail.copyElement')}
+            </button>
+          )}
+          {onDelete && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  className="flex flex-1 h-8 items-center justify-center gap-1.5 rounded-full border border-[#e8c8c6]/80 bg-[#fffdf8]/60 text-xs font-medium text-[#8e5a53] transition-colors hover:border-[#c0392b]/40 hover:bg-[#fdf0ef] hover:shadow-[0_4px_12px_rgba(192,57,43,0.1)]"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t('sessionDetail.deleteElement')}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogTitle>{t('sessionDetail.deleteElement')}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t('sessionDetail.deleteElementConfirm')}
+                </AlertDialogDescription>
+                <div className="flex justify-end gap-2">
+                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-[#c0392b] text-white hover:bg-[#a93226]"
+                    onClick={onDelete}
+                  >
+                    {t('common.delete')}
+                  </AlertDialogAction>
+                </div>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
       </div>
     </div>
   )

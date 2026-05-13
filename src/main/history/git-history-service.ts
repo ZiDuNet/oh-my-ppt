@@ -752,7 +752,10 @@ export class GitHistoryService {
   ): HistoryVersion {
     const metadata = parseJson<Record<string, unknown>>(operation.metadata_json, {})
     const changedFiles = parseJson<ChangedHistoryFile[]>(operation.changed_files_json, [])
-    const changedPages = parseJson<string[]>(operation.changed_pages_json, [])
+    const rawChangedPages = parseJson<string[]>(operation.changed_pages_json, [])
+    // For edit operations, only show the page that was actually edited (not anchor-only changes)
+    const editedPageId = operation.type === 'edit' && typeof metadata.pageId === 'string' ? metadata.pageId : ''
+    const changedPages = editedPageId ? rawChangedPages.filter((p) => p === editedPageId) : rawChangedPages
     const trackedFiles = parseJson<string[]>(operation.tracked_files_json, []).filter(isControlledFile)
     const commit = operation.after_commit || ''
     return {

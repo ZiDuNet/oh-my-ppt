@@ -1,5 +1,29 @@
 # 更新日志 / Changelog
 
+## 2026-05-14 · v2.0.6
+
+### 中文
+
+- 新增复制元素：编辑模式下可复制任意元素，复制的元素自动偏移并独立可编辑。
+- 新增可以添加图片和视频的功能：用户可以在编辑模式下直接上传图片和视频文件（存在本地资源目录的）。
+- 新增操作内可以撤销和重做功能：用户可以在操作内撤销和重做操作，方便回退和恢复，最后再保存为版本纪录。
+- 新增可以删除任意元素的功能：用户可以在编辑模式下，删除任意元素（文字、图片、视频等），支持快捷键。
+- 新增演示模式：支持直接进入全屏演示播放，键盘左右键或点击切换页面。
+- 优化编辑模式稳定性：整体编辑、拖拽、保存和复制的体验更可靠。
+- 优化页面编辑稳定性：用户可以在页面编辑模式下，更稳定地进行全局修改和局部修改。
+- 优化左侧边栏可以折叠：用户可以在编辑模式下，折叠左侧边栏，更方便操作。
+
+### English
+
+- Added element duplication: copy any element in edit mode; copies are auto-offset and independently editable.
+- Added image and video insertion: upload images and videos directly in edit mode (stored in local assets directory).
+- Added undo and redo: undo and redo edits before committing, then save as a version history entry.
+- Added element deletion: delete any element (text, images, videos, etc.) in edit mode, with keyboard shortcut support.
+- Added presentation mode: enter fullscreen presentation directly, navigate slides with arrow keys or clicks.
+- Improved edit mode reliability: overall editing, dragging, saving, and copying are more stable.
+- Improved page editing stability: global and partial edits are more reliable in page edit mode.
+- Improved collapsible sidebar: the left sidebar can now be collapsed in edit mode for more workspace.
+
 ## 2026-05-11 · v2.0.5
 
 ### 中文

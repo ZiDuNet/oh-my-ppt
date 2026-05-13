@@ -9,9 +9,11 @@ Oh My PPT — 本地优先的 AI 幻灯片生成与编辑工具。Electron + Rea
 ```bash
 pnpm dev          # 开发
 pnpm build        # 构建
-pnpm typecheck    # 类型检查
-pnpm lint         # ESLint
-pnpm format       # Prettier
+pnpm run typecheck:node # 跑 node 类型检查
+pnpm run typecheck:web # 跑 renderer 类型检查
+pnpm typecheck    # 跑类型检查  
+pnpm lint         # 不要跑ESLint
+pnpm format       # 不要跑Prettier
 ```
 
 ## Code Style

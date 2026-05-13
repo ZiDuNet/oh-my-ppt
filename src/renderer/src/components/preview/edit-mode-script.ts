@@ -1,6 +1,38 @@
-export const DRAG_EDITOR_CONSOLE_PREFIX = '__PPT_DRAG_EDITOR__:'
+export const EDIT_MODE_CONSOLE_PREFIX = '__PPT_EDIT_MODE__:'
 
-export interface DragEditorMovePayload {
+export interface EditSelectionPayload {
+  selector: string
+  label: string
+  elementTag: string
+  elementText: string
+  isText: boolean
+  text: string
+  style: {
+    color?: string
+    fontSize?: string
+    fontWeight?: string
+    lineHeight?: string
+    textAlign?: string
+    backgroundColor?: string
+  }
+  bounds?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  translateX: number
+  translateY: number
+  zIndex?: number
+  editability?: {
+    x: boolean
+    y: boolean
+    width: boolean
+    height: boolean
+  }
+}
+
+export interface EditModeMovePayload {
   selector: string
   label: string
   elementTag: string
@@ -18,28 +50,33 @@ export interface DragEditorMovePayload {
   }>
 }
 
-export function buildDragEditorInjectScript(): string {
+export function buildEditModeInjectScript(previewScale = 1): string {
   return `
 (() => {
-  const STATE_KEY = "__pptDragEditorState";
-  const STYLE_ID = "ppt-drag-editor-style";
-  const OVERLAY_ID = "ppt-drag-editor-resize-overlay";
-  const HOVER_CLASS = "ppt-drag-editor-hover";
-  const ACTIVE_CLASS = "ppt-drag-editor-active";
-  const HANDLE_CLASS = "ppt-drag-editor-resize-handle";
-  const LOG_PREFIX = "${DRAG_EDITOR_CONSOLE_PREFIX}";
-  const uiMessage = (zh, en) => {
-    try {
-      return window.localStorage.getItem("oh-my-ppt:lang") === "en" ? en : zh;
-    } catch (_error) {
-      return zh;
-    }
-  };
+  const STATE_KEY = "__pptEditModeState";
+  const STYLE_ID = "ppt-edit-mode-style";
+  const OVERLAY_ID = "ppt-edit-mode-resize-overlay";
+  const HOVER_CLASS = "ppt-edit-mode-hover";
+  const SELECTED_CLASS = "ppt-edit-mode-selected";
+  const HANDLE_CLASS = "ppt-edit-mode-resize-handle";
+  const INITIAL_PREVIEW_SCALE = ${JSON.stringify(
+    Number.isFinite(previewScale) && previewScale > 0 ? Number(previewScale.toFixed(4)) : 1
+  )};
+  const LOG_PREFIX = "${EDIT_MODE_CONSOLE_PREFIX}";
   const SCAFFOLD_BLOCK_IDS = new Set(["content"]);
+  // Remove transform from fit-scope to prevent stacking context isolation;
+  // transform (even scale(1)) creates a stacking context that breaks z-index
+  // comparison between elements inside and outside the scope.
+  const __fitScope = document.querySelector(".ppt-page-fit-scope");
+  if (__fitScope) __fitScope.style.transform = "none";
   const TEXT_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "span", "strong", "em", "b", "i", "small", "label", "button", "td", "th", "blockquote", "figcaption"]);
   const BLOCKED_TEXT_TAGS = new Set(["script", "style", "svg", "canvas", "img", "video", "audio", "input", "textarea", "select", "option"]);
 
-  const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const normalizeText = (value) => String(value || "").replace(/\\\\s+/g, " ").trim();
+  const normalizeScale = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+  };
 
   const hasOnlyEditableTextChildren = (element) => {
     return Array.from(element.children || []).every((child) => {
@@ -60,12 +97,16 @@ export function buildDragEditorInjectScript(): string {
     return true;
   };
 
-  // Deferred drag state for text elements: don't start drag on pointerdown,
-  // only start when pointer moves beyond threshold. This preserves dblclick events.
-  let textPendingState = null;
-
   const existing = window[STATE_KEY];
-  if (existing && existing.active) return;
+  if (existing && existing.active) {
+    try {
+      existing.setPreviewScale?.(INITIAL_PREVIEW_SCALE);
+      window.__pptEditModeSetPreviewScale?.(INITIAL_PREVIEW_SCALE);
+    } catch (_error) {}
+    return;
+  }
+
+  let previewScaleValue = normalizeScale(INITIAL_PREVIEW_SCALE);
 
   const cssEscape = (value) => {
     if (window.CSS && typeof window.CSS.escape === "function") {
@@ -92,7 +133,7 @@ export function buildDragEditorInjectScript(): string {
 
   const getClassList = (el) =>
     Array.from(el.classList || [])
-      .filter((item) => item && !item.startsWith("ppt-drag-editor-") && !item.includes(":"))
+      .filter((item) => item && !item.startsWith("ppt-edit-mode-") && !item.includes(":"))
       .slice(0, 3);
 
   const buildSegment = (el) => {
@@ -224,11 +265,66 @@ export function buildDragEditorInjectScript(): string {
     return element && element.closest('[data-block-id="content"], [data-role="content"]');
   };
 
+  const getElementRenderScale = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return { x: 1, y: 1 };
+    }
+
+    const scope = element.closest(".ppt-page-fit-scope");
+    if (scope instanceof HTMLElement) {
+      const scopeRect = scope.getBoundingClientRect();
+      const scopeWidth = scope.offsetWidth || scope.clientWidth;
+      const scopeHeight = scope.offsetHeight || scope.clientHeight;
+      return {
+        x: Math.max(0.01, scopeWidth > 0 ? scopeRect.width / scopeWidth : 1),
+        y: Math.max(0.01, scopeHeight > 0 ? scopeRect.height / scopeHeight : 1),
+      };
+    }
+
+    const rect = element.getBoundingClientRect();
+    const width = element.offsetWidth || element.clientWidth;
+    const height = element.offsetHeight || element.clientHeight;
+    return {
+      x: Math.max(0.01, width > 0 ? rect.width / width : 1),
+      y: Math.max(0.01, height > 0 ? rect.height / height : 1),
+    };
+  };
+
+  const getPointerScale = (element) => {
+    const renderScale = getElementRenderScale(element);
+    // NOTE: Do NOT multiply by the external webview previewScale here.
+    // The browser already maps pointer coordinates to the iframe's own
+    // coordinate system when the webview element has a CSS transform,
+    // so including previewScale would double-compensate and make the
+    // element move 1/previewScale times too far.
+    return {
+      x: Math.max(0.01, renderScale.x),
+      y: Math.max(0.01, renderScale.y),
+    };
+  };
+
+  const getPointerDelta = (element, currentClientX, currentClientY, startClientX, startClientY) => {
+    const scale = getPointerScale(element);
+    return {
+      x: (currentClientX - startClientX) / scale.x,
+      y: (currentClientY - startClientY) / scale.y,
+    };
+  };
+
   const isUsableElementTarget = (element) => {
     if (!(element instanceof Element)) return false;
     if (isScaffoldBlock(element)) return false;
     if (!isInsidePageRoot(element)) return false;
     if (["SCRIPT", "STYLE", "LINK", "META", "TITLE"].includes(element.tagName)) return false;
+    // Atomic visual elements — rendered as a single unit, internals should
+    // not be individually selected; clicks bubble up to the parent container.
+    if (element.closest("svg")) return false;
+    // Elements with data-block-id added via edit mode (IMG/VIDEO) are always selectable
+    if (element.hasAttribute("data-block-id") && ["IMG", "VIDEO"].includes(element.tagName)) {
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 2 && rect.height >= 2;
+    }
+    if (["CANVAS", "VIDEO", "AUDIO", "IFRAME"].includes(element.tagName)) return false;
     const contentRoot = getContentRoot(element);
     const boundaryRoot = contentRoot || getPageRoot(element);
     if (!boundaryRoot || element === boundaryRoot) return false;
@@ -307,16 +403,34 @@ export function buildDragEditorInjectScript(): string {
     return null;
   };
 
+  const promoteToWrapper = (element) => {
+    // Elements with their own data-block-id have a stable identity — don't promote.
+    if (element.getAttribute("data-block-id")) return element;
+    const contentRoot = getContentRoot(element);
+    if (!contentRoot) return element;
+    let candidate = element.parentElement;
+    while (candidate && candidate !== contentRoot) {
+      if (isScaffoldBlock(candidate)) break;
+      const hasBlockChildren = candidate.querySelectorAll("[data-block-id]").length >= 2;
+      const noBlockId = !candidate.getAttribute("data-block-id");
+      if (noBlockId && hasBlockChildren && buildStableSelector(candidate)) {
+        return candidate;
+      }
+      candidate = candidate.parentElement;
+    }
+    return element;
+  };
+
   const pickTarget = (origin, clientX, clientY) => {
     if (!(origin instanceof Element)) return null;
     const chartTarget = pickCanvasTarget(origin);
     if (chartTarget) return chartTarget;
     if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
       const pointTarget = getPointTarget(origin, clientX, clientY);
-      if (pointTarget) return pointTarget;
+      if (pointTarget) return promoteToWrapper(pointTarget);
     }
     const looseTarget = pickLooseContentTarget(origin);
-    if (looseTarget) return looseTarget;
+    if (looseTarget) return promoteToWrapper(looseTarget);
     const blocks = Array.from(origin.closest(".ppt-page-root, [data-ppt-guard-root='1']")?.querySelectorAll("[data-block-id]") || []);
     const target = origin.closest("[data-block-id]");
     if (target && blocks.includes(target) && isInsidePageRoot(target) && !isScaffoldBlock(target)) {
@@ -335,7 +449,13 @@ export function buildDragEditorInjectScript(): string {
     if (computed.display === "inline") {
       target.style.display = "inline-block";
     }
-    target.style.translate = "var(--ppt-drag-x, 0px) var(--ppt-drag-y, 0px)";
+    // Read custom property values and set translate directly as numeric px.
+    // Using var() references can be a no-op when the same template string is
+    // already in the inline style (persisted from a previous drag), preventing
+    // CSS variable changes from taking effect before getBoundingClientRect().
+    const x = parsePx(target.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
+    const y = parsePx(target.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
+    target.style.translate = x.toFixed(1) + "px " + y.toFixed(1) + "px";
     target.style.willChange = "transform";
   };
 
@@ -387,6 +507,10 @@ export function buildDragEditorInjectScript(): string {
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = \`
+      html, body, body * {
+        animation: none !important;
+        transition: none !important;
+      }
       .\${HOVER_CLASS} {
         outline: 2px dashed rgba(93,107,77,0.78) !important;
         outline-offset: 3px !important;
@@ -395,14 +519,14 @@ export function buildDragEditorInjectScript(): string {
       .\${HOVER_CLASS} * {
         cursor: move !important;
       }
-      .\${ACTIVE_CLASS} {
+      .\${SELECTED_CLASS} {
         outline: 2px solid #5d6b4d !important;
         outline-offset: 3px !important;
         box-shadow: 0 0 0 4px rgba(93,107,77,0.14) !important;
         cursor: move !important;
         user-select: none !important;
       }
-      .\${ACTIVE_CLASS} * {
+      .\${SELECTED_CLASS} * {
         cursor: move !important;
       }
       #\${OVERLAY_ID} {
@@ -475,17 +599,24 @@ export function buildDragEditorInjectScript(): string {
     document.head.appendChild(style);
   };
 
+  // --- State ---
   let hoverElement = null;
-  let activeElement = null;
+  let selectedElement = null;
   let dragState = null;
   let resizeState = null;
   let pendingAnchorState = null;
+  let dragPendingState = null;
   let pendingClientX = 0;
   let pendingClientY = 0;
   let frameId = 0;
   let overlayElement = null;
   let overlayResizeObserver = null;
-  const resolveDragAnchor = window.__pptResolveDragAnchor = function(result) {
+
+  // Double-click detection
+
+
+  // Anchor resolution — host resolves selector and calls this
+  window.__pptResolveEditModeAnchor = function(result) {
     if (!pendingAnchorState) return;
     const stableSelector = (result && result.selector) || pendingAnchorState.tempSelector;
     if (pendingAnchorState.mode === 'drag') {
@@ -498,8 +629,8 @@ export function buildDragEditorInjectScript(): string {
         baseX: pendingAnchorState.baseX,
         baseY: pendingAnchorState.baseY,
       };
-      setActive(pendingAnchorState.target);
-    } else {
+      setSelected(pendingAnchorState.target);
+    } else if (pendingAnchorState.mode === 'resize') {
       resizeState = {
         target: pendingAnchorState.target,
         selector: stableSelector,
@@ -529,11 +660,27 @@ export function buildDragEditorInjectScript(): string {
   }
   ensureStyle();
 
+  // Kill residual animations from ppt-default-motion (anime.js).
+  (() => {
+    if (window.PPT && typeof window.PPT.stopAnimations === "function") {
+      try { window.PPT.stopAnimations(); } catch (_e) {}
+    }
+    const root = document.querySelector(".ppt-page-root, [data-ppt-guard-root='1']");
+    if (!root) return;
+    root.querySelectorAll("[style]").forEach((el) => {
+      const s = el.style;
+      if (s.transition && (s.transition.includes("transform") || s.transition.includes("opacity"))) {
+        s.transition = "";
+      }
+    });
+  })();
+
+  // --- Visual helpers ---
   const setHover = (target) => {
     if (hoverElement === target) return;
-    if (hoverElement && hoverElement !== activeElement) hoverElement.classList.remove(HOVER_CLASS);
+    if (hoverElement && hoverElement !== selectedElement) hoverElement.classList.remove(HOVER_CLASS);
     hoverElement = target;
-    if (hoverElement && hoverElement !== activeElement) hoverElement.classList.add(HOVER_CLASS);
+    if (hoverElement && hoverElement !== selectedElement) hoverElement.classList.add(HOVER_CLASS);
   };
 
   const ensureOverlay = () => {
@@ -552,35 +699,33 @@ export function buildDragEditorInjectScript(): string {
   };
 
   const updateOverlay = () => {
-    if (!activeElement) {
+    if (!selectedElement) {
       if (overlayElement) overlayElement.remove();
       overlayElement = null;
       return;
     }
     const overlay = ensureOverlay();
-    const rect = activeElement.getBoundingClientRect();
+    const rect = selectedElement.getBoundingClientRect();
     overlay.style.left = rect.left.toFixed(1) + "px";
     overlay.style.top = rect.top.toFixed(1) + "px";
     overlay.style.width = Math.max(1, rect.width).toFixed(1) + "px";
     overlay.style.height = Math.max(1, rect.height).toFixed(1) + "px";
   };
 
-  const setActive = (target) => {
-    if (activeElement === target) return;
-    if (activeElement) activeElement.classList.remove(ACTIVE_CLASS);
-    // Disconnect previous observer
+  const setSelected = (target) => {
+    if (selectedElement === target) return;
+    if (selectedElement) selectedElement.classList.remove(SELECTED_CLASS);
     if (overlayResizeObserver) {
       overlayResizeObserver.disconnect();
       overlayResizeObserver = null;
     }
-    activeElement = target;
-    if (activeElement) {
-      activeElement.classList.remove(HOVER_CLASS);
-      activeElement.classList.add(ACTIVE_CLASS);
+    selectedElement = target;
+    if (selectedElement) {
+      selectedElement.classList.remove(HOVER_CLASS);
+      selectedElement.classList.add(SELECTED_CLASS);
       updateOverlay();
-      // Watch activeElement for size changes (e.g. text content edits)
       overlayResizeObserver = new ResizeObserver(() => updateOverlay());
-      overlayResizeObserver.observe(activeElement);
+      overlayResizeObserver.observe(selectedElement);
     } else {
       updateOverlay();
     }
@@ -588,9 +733,9 @@ export function buildDragEditorInjectScript(): string {
 
   const clearVisualState = () => {
     if (hoverElement) hoverElement.classList.remove(HOVER_CLASS);
-    if (activeElement) activeElement.classList.remove(ACTIVE_CLASS);
+    if (selectedElement) selectedElement.classList.remove(SELECTED_CLASS);
     hoverElement = null;
-    activeElement = null;
+    selectedElement = null;
     if (overlayResizeObserver) {
       overlayResizeObserver.disconnect();
       overlayResizeObserver = null;
@@ -599,11 +744,82 @@ export function buildDragEditorInjectScript(): string {
     overlayElement = null;
   };
 
+  // --- Emit helpers ---
+  // All elements can be edited — first edit converts to position:absolute.
+  const analyzeEditability = () => ({ x: true, y: true, width: true, height: true });
+
+  const emitSelected = (target, selector) => {
+    const elementTag = target.tagName ? target.tagName.toLowerCase() : "";
+    const isText = isEditableTextElement(target);
+    const rawText = isText ? normalizeText(target.textContent) : "";
+    const elementText = rawText.length > 80 ? rawText.slice(0, 80) + "\\u2026" : rawText;
+    const computed = isText ? window.getComputedStyle(target) : null;
+    const rect = target.getBoundingClientRect();
+    const currentDragX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
+    const currentDragY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
+    const rawZIndex = window.getComputedStyle(target).zIndex;
+    const zIndex = rawZIndex && rawZIndex !== 'auto' ? parseInt(rawZIndex, 10) : undefined;
+
+    console.log(LOG_PREFIX + JSON.stringify({
+      type: "selected",
+      selector,
+      label: selector,
+      elementTag,
+      elementText,
+      isText,
+      text: rawText,
+      style: computed ? {
+        color: computed.color || "",
+        fontSize: computed.fontSize || "",
+        fontWeight: computed.fontWeight || "",
+        lineHeight: computed.lineHeight || "",
+        textAlign: computed.textAlign || "",
+        backgroundColor: computed.backgroundColor || ""
+      } : {},
+      bounds: {
+            x: Math.round(rect.left * 10) / 10,
+            y: Math.round(rect.top * 10) / 10,
+            width: Math.round(rect.width * 10) / 10,
+            height: Math.round(rect.height * 10) / 10
+          },
+      translateX: target.hasAttribute("data-ppt-layout-converted") ? 0 : currentDragX,
+      translateY: target.hasAttribute("data-ppt-layout-converted") ? 0 : currentDragY,
+      zIndex,
+      editability: analyzeEditability(target)
+    }));
+  };
+
+  // --- Drag/Resize frame callbacks ---
   const applyPendingDrag = () => {
     frameId = 0;
     if (!dragState) return;
-    const nextX = dragState.baseX + pendingClientX - dragState.startClientX;
-    const nextY = dragState.baseY + pendingClientY - dragState.startClientY;
+    // Absolute-converted elements: move via left/top directly
+    if (dragState.target.hasAttribute("data-ppt-layout-converted")) {
+      const delta = getPointerDelta(
+        dragState.target,
+        pendingClientX,
+        pendingClientY,
+        dragState.startClientX,
+        dragState.startClientY
+      );
+      dragState.target.style.left = (dragState.baseX + delta.x).toFixed(1) + "px";
+      dragState.target.style.top = (dragState.baseY + delta.y).toFixed(1) + "px";
+      // Sync the viewport tracker so next Inspector edit computes correct delta
+      const dragRect = dragState.target.getBoundingClientRect();
+      dragState.target.setAttribute("data-ppt-last-vp-x", dragRect.left.toFixed(1));
+      dragState.target.setAttribute("data-ppt-last-vp-y", dragRect.top.toFixed(1));
+      updateOverlay();
+      return;
+    }
+    const delta = getPointerDelta(
+      dragState.target,
+      pendingClientX,
+      pendingClientY,
+      dragState.startClientX,
+      dragState.startClientY
+    );
+    const nextX = dragState.baseX + delta.x;
+    const nextY = dragState.baseY + delta.y;
     dragState.target.style.setProperty("--ppt-drag-x", nextX.toFixed(1) + "px");
     dragState.target.style.setProperty("--ppt-drag-y", nextY.toFixed(1) + "px");
     ensureDragTranslate(dragState.target);
@@ -613,8 +829,15 @@ export function buildDragEditorInjectScript(): string {
   const applyPendingResize = () => {
     frameId = 0;
     if (!resizeState) return;
-    const dx = pendingClientX - resizeState.startClientX;
-    const dy = pendingClientY - resizeState.startClientY;
+    const delta = getPointerDelta(
+      resizeState.target,
+      pendingClientX,
+      pendingClientY,
+      resizeState.startClientX,
+      resizeState.startClientY
+    );
+    const dx = delta.x;
+    const dy = delta.y;
     const dir = resizeState.dir;
     const affectsWidth = dir.includes("w") || dir.includes("e");
     const affectsHeight = dir.includes("n") || dir.includes("s");
@@ -640,13 +863,24 @@ export function buildDragEditorInjectScript(): string {
       if (affectsWidth) item.element.style.width = roundPx(item.baseWidth * scaleX).toFixed(1) + "px";
       if (affectsHeight) item.element.style.height = roundPx(item.baseHeight * scaleY).toFixed(1) + "px";
     });
-    resizeState.target.style.setProperty("--ppt-drag-x", nextX.toFixed(1) + "px");
-    resizeState.target.style.setProperty("--ppt-drag-y", nextY.toFixed(1) + "px");
-    ensureDragTranslate(resizeState.target);
+    // Absolute-converted elements: move via left/top
+    if (resizeState.target.hasAttribute("data-ppt-layout-converted")) {
+      resizeState.target.style.left = nextX.toFixed(1) + "px";
+      resizeState.target.style.top = nextY.toFixed(1) + "px";
+      // Sync the viewport tracker so next Inspector edit computes correct delta
+      const resizeRect = resizeState.target.getBoundingClientRect();
+      resizeState.target.setAttribute("data-ppt-last-vp-x", resizeRect.left.toFixed(1));
+      resizeState.target.setAttribute("data-ppt-last-vp-y", resizeRect.top.toFixed(1));
+    } else {
+      resizeState.target.style.setProperty("--ppt-drag-x", nextX.toFixed(1) + "px");
+      resizeState.target.style.setProperty("--ppt-drag-y", nextY.toFixed(1) + "px");
+      ensureDragTranslate(resizeState.target);
+    }
     resizeNestedCharts(resizeState.target);
     updateOverlay();
   };
 
+  // --- Pointer event handlers ---
   const onPointerMove = (event) => {
     if (pendingAnchorState) {
       pendingClientX = event.clientX;
@@ -656,21 +890,21 @@ export function buildDragEditorInjectScript(): string {
       return;
     }
 
-    // Deferred text drag: only activate when pointer moves beyond threshold
-    if (textPendingState) {
-      const dx = event.clientX - textPendingState.startClientX;
-      const dy = event.clientY - textPendingState.startClientY;
+    // Deferred drag: only activate when pointer moves beyond threshold
+    if (dragPendingState) {
+      const dx = event.clientX - dragPendingState.startClientX;
+      const dy = event.clientY - dragPendingState.startClientY;
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
       // Threshold exceeded — convert to real drag
-      const s = textPendingState;
-      textPendingState = null;
+      const s = dragPendingState;
+      dragPendingState = null;
       ensureDragTranslate(s.target);
       if (rootHost && rootHost.style) rootHost.style.cursor = "move";
       if (cursorHost && cursorHost.style) cursorHost.style.cursor = "move";
       pendingClientX = event.clientX;
       pendingClientY = event.clientY;
       if (s.selector.indexOf('[data-block-id=') !== -1) {
-        setActive(s.target);
+        setSelected(s.target);
         dragState = {
           target: s.target,
           selector: s.selector,
@@ -730,20 +964,25 @@ export function buildDragEditorInjectScript(): string {
   const onPointerDown = (event) => {
     if (event.button !== 0) return;
     const handle = event.target instanceof Element ? event.target.closest("." + HANDLE_CLASS) : null;
-    if (handle && activeElement) {
-      const selector = buildStableSelector(activeElement);
+    if (handle && selectedElement) {
+      const selector = buildStableSelector(selectedElement);
       if (!selector) return;
-      const computed = getComputedStyle(activeElement);
-      const rect = activeElement.getBoundingClientRect();
-      const baseX = parsePx(activeElement.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
-      const baseY = parsePx(activeElement.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
-      ensureDragTranslate(activeElement);
+      const isAbsSel = selectedElement.hasAttribute("data-ppt-layout-converted");
+      const computed = isAbsSel ? null : getComputedStyle(selectedElement);
+      const rect = selectedElement.getBoundingClientRect();
+      const baseX = isAbsSel
+        ? parseFloat(selectedElement.style.left || "0")
+        : parsePx(selectedElement.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
+      const baseY = isAbsSel
+        ? parseFloat(selectedElement.style.top || "0")
+        : parsePx(selectedElement.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
+      if (!isAbsSel) ensureDragTranslate(selectedElement);
       pendingClientX = event.clientX;
       pendingClientY = event.clientY;
-      const elementTag = activeElement.tagName ? activeElement.tagName.toLowerCase() : "";
+      const elementTag = selectedElement.tagName ? selectedElement.tagName.toLowerCase() : "";
       if (selector.indexOf('[data-block-id=') !== -1) {
         resizeState = {
-          target: activeElement,
+          target: selectedElement,
           selector,
           elementTag,
           dir: handle.getAttribute("data-dir") || "se",
@@ -753,12 +992,12 @@ export function buildDragEditorInjectScript(): string {
           baseY,
           baseWidth: Math.max(1, rect.width),
           baseHeight: Math.max(1, rect.height),
-          childItems: collectResizableChildren(activeElement),
+          childItems: collectResizableChildren(selectedElement),
         };
       } else {
         pendingAnchorState = {
           mode: 'resize',
-          target: activeElement,
+          target: selectedElement,
           tempSelector: selector,
           elementTag,
           dir: handle.getAttribute("data-dir") || "se",
@@ -768,7 +1007,7 @@ export function buildDragEditorInjectScript(): string {
           baseY,
           baseWidth: Math.max(1, rect.width),
           baseHeight: Math.max(1, rect.height),
-          childItems: collectResizableChildren(activeElement),
+          childItems: collectResizableChildren(selectedElement),
         };
         console.log(LOG_PREFIX + JSON.stringify({ type: "pre-anchor", selector, elementTag }));
       }
@@ -784,85 +1023,39 @@ export function buildDragEditorInjectScript(): string {
     if (!target) return;
 
     const selector = buildStableSelector(target);
-    if (!selector) {
-      console.log(LOG_PREFIX + JSON.stringify({
-        type: "invalid",
-        message: uiMessage("请拖拽页面内可见元素", "Drag a visible element inside the page"),
-      }));
-      return;
-    }
+    if (!selector) return;
 
-    // Text elements use deferred drag: don't preventDefault / setPointerCapture
-    // so that click/dblclick events can fire for the text editor.
-    // Drag only activates on significant pointer movement.
-    if (isEditableTextElement(target)) {
-      const computed = getComputedStyle(target);
-      const baseX = parsePx(target.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
-      const baseY = parsePx(target.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
-      const elementTag = target.tagName ? target.tagName.toLowerCase() : "";
-      textPendingState = {
-        target,
-        selector,
-        elementTag,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        baseX,
-        baseY,
-      };
-      return;
-    }
-    if (!selector) {
-      console.log(LOG_PREFIX + JSON.stringify({
-        type: "invalid",
-        message: uiMessage("请拖拽页面内可见元素", "Drag a visible element inside the page"),
-      }));
-      return;
-    }
-
-    const computed = getComputedStyle(target);
-    const baseX = parsePx(target.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
-    const baseY = parsePx(target.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
-    ensureDragTranslate(target);
-    if (rootHost && rootHost.style) rootHost.style.cursor = "move";
-    if (cursorHost && cursorHost.style) cursorHost.style.cursor = "move";
-    pendingClientX = event.clientX;
-    pendingClientY = event.clientY;
+    // All elements: deferred drag. Record start position.
+    // < 3px on pointerup = click (emit selected). >= 3px on pointermove = drag.
+    const isAbsConverted = target.hasAttribute("data-ppt-layout-converted");
+    const computed = isAbsConverted ? null : getComputedStyle(target);
+    const baseX = isAbsConverted
+      ? parseFloat(target.style.left || "0")
+      : parsePx(target.style.getPropertyValue("--ppt-drag-x") || computed.getPropertyValue("--ppt-drag-x"));
+    const baseY = isAbsConverted
+      ? parseFloat(target.style.top || "0")
+      : parsePx(target.style.getPropertyValue("--ppt-drag-y") || computed.getPropertyValue("--ppt-drag-y"));
     const elementTag = target.tagName ? target.tagName.toLowerCase() : "";
-    if (selector.indexOf('[data-block-id=') !== -1) {
-      setActive(target);
-      dragState = {
-        target,
-        selector,
-        elementTag,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        baseX,
-        baseY,
-      };
-    } else {
-      pendingAnchorState = {
-        mode: 'drag',
-        target,
-        tempSelector: selector,
-        elementTag,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        baseX,
-        baseY,
-      };
-      console.log(LOG_PREFIX + JSON.stringify({ type: "pre-anchor", selector, elementTag }));
-    }
-    try {
-      target.setPointerCapture?.(event.pointerId);
-    } catch (_error) {}
+    dragPendingState = {
+      target,
+      selector,
+      elementTag,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      baseX,
+      baseY,
+    };
     event.preventDefault();
     event.stopPropagation();
   };
 
-  const finishDrag = (event) => {
-    // Clear deferred text drag on pointerup — no movement means it was just a click/dblclick
-    if (textPendingState) {
-      textPendingState = null;
+  const onPointerUp = (event) => {
+    // Click (< 3px movement): select element and emit to host
+    if (dragPendingState) {
+      const s = dragPendingState;
+      dragPendingState = null;
+      setSelected(s.target);
+      emitSelected(s.target, s.selector);
       return;
     }
 
@@ -882,12 +1075,24 @@ export function buildDragEditorInjectScript(): string {
         applyPendingResize();
       }
       const target = resizeState.target;
-      const nextX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
-      const nextY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
+      const isAbsUp = target.hasAttribute("data-ppt-layout-converted");
+      // For absolute elements: payload.x = displacement (same semantics as translate offset)
+      // For translate elements: payload.x = the translate offset
+      let nextX, nextY;
+      if (isAbsUp) {
+        const currentLeft = parseFloat(target.style.left || "0");
+        const currentTop = parseFloat(target.style.top || "0");
+        nextX = currentLeft - resizeState.baseX;
+        nextY = currentTop - resizeState.baseY;
+      } else {
+        nextX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
+        nextY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
+      }
       const nextWidth = parsePx(target.style.width) || resizeState.baseWidth;
       const nextHeight = parsePx(target.style.height) || resizeState.baseHeight;
-      const deltaX = nextX - resizeState.baseX;
-      const deltaY = nextY - resizeState.baseY;
+      // For absolute: nextX is already displacement from baseX. For translate: nextX is the offset.
+      const deltaX = isAbsUp ? nextX : (nextX - resizeState.baseX);
+      const deltaY = isAbsUp ? nextY : (nextY - resizeState.baseY);
       const scale = nextWidth / resizeState.baseWidth;
       const affectsWidth = resizeState.dir.includes("w") || resizeState.dir.includes("e");
       const affectsHeight = resizeState.dir.includes("n") || resizeState.dir.includes("s");
@@ -930,19 +1135,43 @@ export function buildDragEditorInjectScript(): string {
     }
 
     if (!dragState) return;
-    if (frameId) {
-      cancelAnimationFrame(frameId);
-      applyPendingDrag();
-    }
+    if (frameId) cancelAnimationFrame(frameId);
+    // Always apply the latest pointer position — the last rAF may have
+    // already fired (frameId === 0) while the pointer kept moving.
+    pendingClientX = event.clientX;
+    pendingClientY = event.clientY;
+    applyPendingDrag();
     const target = dragState.target;
-    const nextX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
-    const nextY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
-    const deltaX = nextX - dragState.baseX;
-    const deltaY = nextY - dragState.baseY;
+    const isAbsDrag = target.hasAttribute("data-ppt-layout-converted");
+    // For absolute elements: payload.x = visual displacement from the position
+    // at selection time. handleElementMoved computes visualX = originalCSSX + payload.x,
+    // where originalCSSX = bounds.x (since translateX=0). So payload.x = currentViewportX - bounds.x.
+    // For translate elements: payload.x = the translate offset directly.
+    let nextX, nextY;
+    if (isAbsDrag) {
+      const dragRect = target.getBoundingClientRect();
+      // baseX for absolute was stored as style.left (offsetParent-relative).
+      // We need the viewport displacement: use rect delta from drag start.
+      // dragState.baseX = initial style.left; applyPendingDrag set style.left = baseX + pointerDelta.
+      // So the pointer delta = currentLeft - baseX = viewport displacement.
+      const currentLeft = parseFloat(target.style.left || "0");
+      const pointerDeltaX = currentLeft - dragState.baseX;
+      const pointerDeltaY = parseFloat(target.style.top || "0") - dragState.baseY;
+      // payload.x = displacement from selection-time viewport position
+      // At selection time, translateX was 0 (cleared during conversion), so:
+      // originalCSSX = bounds.x, and we want visualX = bounds.x + payload.x = currentViewportX
+      // => payload.x = pointerDeltaX (the movement since drag start)
+      nextX = pointerDeltaX;
+      nextY = pointerDeltaY;
+    } else {
+      nextX = parsePx(target.style.getPropertyValue("--ppt-drag-x"));
+      nextY = parsePx(target.style.getPropertyValue("--ppt-drag-y"));
+    }
+    const deltaX = isAbsDrag ? nextX : (nextX - dragState.baseX);
+    const deltaY = isAbsDrag ? nextY : (nextY - dragState.baseY);
     try {
       target.releasePointerCapture?.(event.pointerId);
     } catch (_error) {}
-    target.classList.remove(ACTIVE_CLASS);
     target.style.willChange = "";
     updateOverlay();
     if (rootHost && rootHost.style) rootHost.style.cursor = "move";
@@ -970,14 +1199,140 @@ export function buildDragEditorInjectScript(): string {
       console.log(LOG_PREFIX + JSON.stringify({ type: "exit" }));
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && selectedElement) {
+      const selector = buildStableSelector(selectedElement);
+      if (selector) {
+        console.log(LOG_PREFIX + JSON.stringify({ type: "delete-request", selector }));
+      }
+      event.preventDefault();
+      event.stopPropagation();
     }
   };
 
+  const setPreviewScale = (value) => {
+    previewScaleValue = normalizeScale(value);
+  };
+
+  // --- Live update API (called by host via executeJavaScript) ---
+  window.__pptEditModeLiveUpdate = (selector, patch) => {
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      if (typeof patch.text === "string") {
+        el.textContent = patch.text;
+      }
+      if (patch.style) {
+        if (patch.style.color) el.style.setProperty("color", patch.style.color, "important");
+        if (patch.style.fontSize) el.style.setProperty("font-size", patch.style.fontSize, "important");
+        if (patch.style.fontWeight) el.style.setProperty("font-weight", patch.style.fontWeight, "important");
+      }
+    } catch (_error) {}
+  };
+
+  // Convert element to position:absolute on first layout edit ("browser-like").
+  // Uses incremental approach (same as drag) to avoid coordinate system issues:
+  // remember the last viewport position, compute delta, apply to style.left/top.
+  window.__pptEditModeSetLayout = (selector, layout) => {
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      // First edit: convert to position:absolute
+      if (!el.hasAttribute("data-ppt-layout-converted")) {
+        // 1. Record current visual position BEFORE changing position
+        const rect = el.getBoundingClientRect();
+        // 2. Set position:absolute first — this changes the offsetParent
+        el.style.position = "absolute";
+        // 3. Force synchronous reflow so offsetParent updates to the absolute context
+        void el.offsetTop;
+        // 4. Now read the NEW offsetParent (nearest positioned ancestor for absolute)
+        const newOffsetParent = el.offsetParent;
+        const newOffsetRect = newOffsetParent
+          ? newOffsetParent.getBoundingClientRect()
+          : { left: 0, top: 0 };
+        // 5. Set left/top using pre-conversion visual position minus new offset
+        el.style.left = (rect.left - newOffsetRect.left).toFixed(1) + "px";
+        el.style.top = (rect.top - newOffsetRect.top).toFixed(1) + "px";
+        el.style.width = Math.max(1, rect.width).toFixed(1) + "px";
+        el.style.height = Math.max(1, rect.height).toFixed(1) + "px";
+        el.style.zIndex = "10";
+        // Clear translate mechanism
+        el.style.translate = "";
+        el.style.removeProperty("--ppt-drag-x");
+        el.style.removeProperty("--ppt-drag-y");
+        // Remember the current viewport position for delta-based updates
+        el.setAttribute("data-ppt-last-vp-x", rect.left.toFixed(1));
+        el.setAttribute("data-ppt-last-vp-y", rect.top.toFixed(1));
+        el.setAttribute("data-ppt-layout-converted", "1");
+      }
+      // Incremental: compute delta from last known viewport position,
+      // apply to current style.left/top (offsetParent-relative).
+      // This mirrors how drag works — only relative changes, no coordinate conversion.
+      if (layout.x !== undefined) {
+        const lastVpX = parseFloat(el.getAttribute("data-ppt-last-vp-x") || "0");
+        const delta = layout.x - lastVpX;
+        const curLeft = parseFloat(el.style.left || "0");
+        el.style.left = (curLeft + delta).toFixed(1) + "px";
+        el.setAttribute("data-ppt-last-vp-x", layout.x.toFixed(1));
+      }
+      if (layout.y !== undefined) {
+        const lastVpY = parseFloat(el.getAttribute("data-ppt-last-vp-y") || "0");
+        const delta = layout.y - lastVpY;
+        const curTop = parseFloat(el.style.top || "0");
+        el.style.top = (curTop + delta).toFixed(1) + "px";
+        el.setAttribute("data-ppt-last-vp-y", layout.y.toFixed(1));
+      }
+      if (layout.width !== undefined) el.style.width = Math.max(1, layout.width).toFixed(1) + "px";
+      if (layout.height !== undefined) el.style.height = Math.max(1, layout.height).toFixed(1) + "px";
+      updateOverlay();
+    } catch (_error) {}
+  };
+
+  window.__pptEditModeClearSelection = () => {
+    if (selectedElement) {
+      selectedElement.classList.remove(SELECTED_CLASS);
+      selectedElement = null;
+    }
+    if (overlayResizeObserver) {
+      overlayResizeObserver.disconnect();
+      overlayResizeObserver = null;
+    }
+    if (overlayElement) {
+      overlayElement.remove();
+      overlayElement = null;
+    }
+  };
+
+  window.__pptEditModeInjectElement = (parentSelector, html) => {
+    try {
+      // Inject into .ppt-page-root so element is inside the page root (required for selection/drag)
+      const parent = document.querySelector('.ppt-page-root') ||
+                     document.querySelector('[data-ppt-guard-root="1"]') ||
+                     document.querySelector(parentSelector);
+      if (!parent) return;
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      const el = temp.firstElementChild;
+      if (el) {
+        parent.appendChild(el);
+        selectedElement = el;
+        el.classList.add(SELECTED_CLASS);
+        requestAnimationFrame(() => {
+          updateOverlay();
+        });
+      }
+    } catch (_error) {}
+  };
+
+  window.__pptEditModeSetPreviewScale = setPreviewScale;
+
+  // --- Cleanup ---
   const cleanup = () => {
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("pointerdown", onPointerDown, true);
-    document.removeEventListener("pointerup", finishDrag, true);
-    document.removeEventListener("pointercancel", finishDrag, true);
+    document.removeEventListener("pointerup", onPointerUp, true);
+    document.removeEventListener("pointercancel", onPointerUp, true);
     document.removeEventListener("keydown", onKeyDown, true);
     clearVisualState();
     if (overlayResizeObserver) {
@@ -992,8 +1347,13 @@ export function buildDragEditorInjectScript(): string {
     overlayElement = null;
     resizeState = null;
     pendingAnchorState = null;
-    textPendingState = null;
-    delete window.__pptResolveDragAnchor;
+    dragPendingState = null;
+    delete window.__pptResolveEditModeAnchor;
+    delete window.__pptEditModeLiveUpdate;
+    delete window.__pptEditModeSetLayout;
+    delete window.__pptEditModeClearSelection;
+    delete window.__pptEditModeInjectElement;
+    delete window.__pptEditModeSetPreviewScale;
     const style = document.getElementById(STYLE_ID);
     if (style) style.remove();
     if (cursorHost && cursorHost.style) {
@@ -1007,19 +1367,37 @@ export function buildDragEditorInjectScript(): string {
 
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("pointerdown", onPointerDown, true);
-  document.addEventListener("pointerup", finishDrag, true);
-  document.addEventListener("pointercancel", finishDrag, true);
+  document.addEventListener("pointerup", onPointerUp, true);
+  document.addEventListener("pointercancel", onPointerUp, true);
   document.addEventListener("keydown", onKeyDown, true);
 
-  window[STATE_KEY] = { active: true, cleanup };
+  window[STATE_KEY] = { active: true, cleanup, setPreviewScale };
 })();
-  `
+`
 }
 
-export function buildDragEditorCleanupScript(): string {
+export function buildEditModeSetPreviewScaleScript(previewScale: number): string {
+  const normalizedScale =
+    Number.isFinite(previewScale) && previewScale > 0 ? Number(previewScale.toFixed(4)) : 1;
   return `
 (() => {
-  const STATE_KEY = "__pptDragEditorState";
+  const value = ${JSON.stringify(normalizedScale)};
+  if (typeof window.__pptEditModeSetPreviewScale === "function") {
+    window.__pptEditModeSetPreviewScale(value);
+    return;
+  }
+  const state = window.__pptEditModeState;
+  if (state && typeof state.setPreviewScale === "function") {
+    state.setPreviewScale(value);
+  }
+})();
+`;
+}
+
+export function buildEditModeCleanupScript(): string {
+  return `
+(() => {
+  const STATE_KEY = "__pptEditModeState";
   const state = window[STATE_KEY];
   if (state && typeof state.cleanup === "function") {
     state.cleanup();
@@ -1027,5 +1405,5 @@ export function buildDragEditorCleanupScript(): string {
     delete window[STATE_KEY];
   }
 })();
-  `
+`
 }

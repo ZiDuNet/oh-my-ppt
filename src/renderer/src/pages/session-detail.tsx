@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ipc } from '@renderer/lib/ipc'
-import type { DragEditorMovePayload } from '../components/preview/drag-editor-script'
-import type { TextEditorSelectionPayload } from '../components/preview/text-editor-types'
+import type {
+  EditModeMovePayload,
+  EditSelectionPayload
+} from '../components/preview/edit-mode-script'
 import type { PreviewIframeHandle } from '../components/preview/PreviewIframe'
 import { TooltipProvider } from '../components/ui/Tooltip'
 import { Button } from '../components/ui/Button'
@@ -14,26 +16,43 @@ import {
   DialogHeader,
   DialogTitle
 } from '../components/ui/Dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle
+} from '../components/ui/AlertDialog'
 import { MessagePanel } from '../components/session-detail/MessagePanel'
 import { PageSidebar } from '../components/session-detail/PageSidebar'
 import { PreviewStage } from '../components/session-detail/PreviewStage'
+import { ElementInspectorPanel } from '../components/session-detail/ElementInspectorPanel'
 import { SessionToolbar } from '../components/session-detail/SessionToolbar'
+import { AssetPickerDialog } from '../components/session-detail/AssetPickerDialog'
 import type { ElementEditDraft } from '../components/session-detail/ElementInspectorPanel'
 import type { ChatType, SessionPreviewPage } from '../components/session-detail/types'
 import { useSessionStore, useGenerateStore } from '../store'
 import { useSessionDetailUiStore } from '../store/sessionDetailStore'
+import { useEditHistoryStore } from '../store/editHistoryStore'
 import type { GenerateChunkEvent } from '@shared/generation.js'
 import type { HistoryVersion } from '@shared/history.js'
 import { useToastStore } from '../store'
 import { getEditorGate } from '../lib/sessionMetadata'
 import { useT } from '../i18n'
 import dayjs from 'dayjs'
+import { nanoid } from 'nanoid'
 
 const EMPTY_ELEMENT_DRAFT: ElementEditDraft = {
   text: '',
   color: '#34402c',
   fontSize: '',
-  fontWeight: '400'
+  fontWeight: '400',
+  layoutX: '',
+  layoutY: '',
+  layoutWidth: '',
+  layoutHeight: '',
+  layoutZIndex: ''
 }
 
 function normalizePagesForSelection(
@@ -109,17 +128,17 @@ export function SessionDetailPage(): React.JSX.Element {
   const isAddingPage = useSessionDetailUiStore((state) => state.isAddingPage)
   const isRetryingSinglePage = useSessionDetailUiStore((state) => state.isRetryingSinglePage)
   const isManagingPages = useSessionDetailUiStore((state) => state.isManagingPages)
+  const sidebarCollapsed = useSessionDetailUiStore((state) => state.sidebarCollapsed)
+  const toggleSidebarCollapsed = useSessionDetailUiStore((state) => state.toggleSidebarCollapsed)
+  const assetPickerOpen = useSessionDetailUiStore((state) => state.assetPickerOpen)
+  const assetPickerType = useSessionDetailUiStore((state) => state.assetPickerType)
+  const setAssetPickerOpen = useSessionDetailUiStore((state) => state.setAssetPickerOpen)
   const setAddPageDialogOpen = useSessionDetailUiStore((state) => state.setAddPageDialogOpen)
   const setIsAddingPage = useSessionDetailUiStore((state) => state.setIsAddingPage)
   const activeChatRef = useRef<{ chatType: ChatType; pageId?: string }>({ chatType: 'page' })
-  const [pendingDragEdits, setPendingDragEdits] = useState<
-    Array<DragEditorMovePayload & { pageId: string; htmlPath: string }>
-  >([])
-  const [pendingTextEdits, setPendingTextEdits] = useState<
-    Array<{ pageId: string; htmlPath: string; selector: string; patch: { text: string; style: { color: string; fontSize: string; fontWeight: string } } }>
-  >([])
+  const editHistory = useEditHistoryStore()
   const [isSavingEdits, setIsSavingEdits] = useState(false)
-  const [textSelection, setTextSelection] = useState<TextEditorSelectionPayload | null>(null)
+  const [textSelection, setTextSelection] = useState<EditSelectionPayload | null>(null)
   const [textDraft, setTextDraft] = useState<ElementEditDraft>(EMPTY_ELEMENT_DRAFT)
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -128,6 +147,8 @@ export function SessionDetailPage(): React.JSX.Element {
   const [historyRollbackId, setHistoryRollbackId] = useState<string | null>(null)
   const [rollbackConfirmVersion, setRollbackConfirmVersion] = useState<HistoryVersion | null>(null)
   const [deleteConfirmPage, setDeleteConfirmPage] = useState<SessionPreviewPage | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [pendingDeleteSelector, setPendingDeleteSelector] = useState<string | null>(null)
   const previewIframeRef = useRef<PreviewIframeHandle | null>(null)
   const sendingMessageRef = useRef(false)
   const [addPageInput, setAddPageInput] = useState('')
@@ -159,8 +180,7 @@ export function SessionDetailPage(): React.JSX.Element {
   useEffect(() => {
     resetForPageChange()
     window.setTimeout(() => {
-      setPendingDragEdits([])
-      setPendingTextEdits([])
+      useEditHistoryStore.getState().clear()
       setTextSelection(null)
       setTextDraft(EMPTY_ELEMENT_DRAFT)
     }, 0)
@@ -242,6 +262,7 @@ export function SessionDetailPage(): React.JSX.Element {
     return () => {
       useGenerateStore.getState().reset()
       useSessionDetailUiStore.getState().resetForSessionChange()
+      useEditHistoryStore.getState().clear()
     }
   }, [id, loadSession, resetForSessionChange, setMessages])
 
@@ -260,7 +281,11 @@ export function SessionDetailPage(): React.JSX.Element {
   useEffect(() => {
     if (!id || !currentSession) return
     // Don't redirect during addPage / retrySinglePage — we're already on the editor page
-    if (useSessionDetailUiStore.getState().isAddingPage || useSessionDetailUiStore.getState().isRetryingSinglePage) return
+    if (
+      useSessionDetailUiStore.getState().isAddingPage ||
+      useSessionDetailUiStore.getState().isRetryingSinglePage
+    )
+      return
     if (!canEditInSessionDetail) {
       navigate(`/sessions/${id}/generating`, { replace: true })
     }
@@ -275,7 +300,11 @@ export function SessionDetailPage(): React.JSX.Element {
 
   useEffect(() => {
     // Skip auto-select during addPage / retrySinglePage — selection managed explicitly
-    if (useSessionDetailUiStore.getState().isAddingPage || useSessionDetailUiStore.getState().isRetryingSinglePage) return
+    if (
+      useSessionDetailUiStore.getState().isAddingPage ||
+      useSessionDetailUiStore.getState().isRetryingSinglePage
+    )
+      return
 
     if (normalizedOrderedPages.length === 0) {
       useSessionDetailUiStore.getState().setSelectedPageId(null)
@@ -806,7 +835,10 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }
 
-  const handleExportPptx = async (options?: { exportImages?: boolean; exportShapes?: boolean }): Promise<void> => {
+  const handleExportPptx = async (options?: {
+    exportImages?: boolean
+    exportShapes?: boolean
+  }): Promise<void> => {
     const detailState = useSessionDetailUiStore.getState()
     if (!id || detailState.isExportingPptx) return
     detailState.setIsExportingPptx(true)
@@ -841,88 +873,111 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }
 
-  const selectedPagePendingDragCount = useMemo(() => {
-    if (!selectedPage?.pageId) return 0
-    return pendingDragEdits.filter((item) => item.pageId === selectedPage.pageId).length
-  }, [pendingDragEdits, selectedPage])
-
-  const handleElementMoved = (payload: DragEditorMovePayload): void => {
+  const handleElementMoved = (payload: EditModeMovePayload): void => {
     if (!id || !selectedPage?.htmlPath || !selectedPage.pageId) return
-    const nextEdit = {
-      ...payload,
-      pageId: selectedPage.pageId,
-      htmlPath: selectedPage.htmlPath
+
+    // Sync inspector panel layout fields when the selected element is dragged
+    // payload.x/y are translate offsets (--ppt-drag-x/y), convert to visual position for display
+    if (textSelection && payload.selector === textSelection.selector) {
+      const originalCSSX =
+        (textSelection.bounds?.x ?? 0) - (textSelection.translateX ?? 0)
+      const originalCSSY =
+        (textSelection.bounds?.y ?? 0) - (textSelection.translateY ?? 0)
+      const visualX = originalCSSX + payload.x
+      const visualY = originalCSSY + payload.y
+      setTextDraft((prev) => ({
+        ...prev,
+        layoutX: String(Math.round(visualX)),
+        layoutY: String(Math.round(visualY)),
+        ...(payload.width !== undefined ? { layoutWidth: String(Math.round(payload.width)) } : {}),
+        ...(payload.height !== undefined ? { layoutHeight: String(Math.round(payload.height)) } : {})
+      }))
     }
-    setPendingDragEdits((items) => {
-      const existingIndex = items.findIndex(
-        (item) =>
-          item.pageId === nextEdit.pageId &&
-          item.htmlPath === nextEdit.htmlPath &&
-          item.selector === nextEdit.selector
-      )
-      if (existingIndex < 0) return [...items, nextEdit]
-      return items.map((item, index) => (index === existingIndex ? nextEdit : item))
-    })
+
+    const nextEdit = {
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      selector: payload.selector,
+      x: payload.x,
+      y: payload.y,
+      width: payload.width ?? null,
+      height: payload.height ?? null,
+      childUpdates: payload.childUpdates ?? [],
+      isAbsoluteMode: false,
+      zIndex: parseInt(textDraft.layoutZIndex, 10) || undefined
+    }
+    editHistory.upsertDragEdit(nextEdit)
   }
 
   // Unified save: persist both drag edits and text edits for the current page
   const handleSaveAllEdits = async (): Promise<void> => {
-    if (!id || !selectedPage?.pageId) return
-    const dragEdits = pendingDragEdits.filter((item) => item.pageId === selectedPage.pageId)
-    const textEdits = pendingTextEdits.filter((item) => item.pageId === selectedPage.pageId)
-    if (dragEdits.length === 0 && textEdits.length === 0) {
+    if (!id || !selectedPage?.pageId || !selectedPage.htmlPath) return
+    const snapshot = editHistory.getSnapshotForPage(selectedPage.pageId)
+    const hasEdits =
+      snapshot.dragEdits.length > 0 ||
+      snapshot.textEdits.length > 0 ||
+      snapshot.deletes.length > 0 ||
+      snapshot.addElements.length > 0
+    if (!hasEdits) {
+      previewIframeRef.current?.clearEditModeSelection()
+      setTextSelection(null)
+      setTextDraft(EMPTY_ELEMENT_DRAFT)
+      setPreviewRefreshKey((key) => key + 1)
       useSessionDetailUiStore.getState().setInteractionMode('preview')
       return
     }
     setIsSavingEdits(true)
     try {
-      for (const edit of dragEdits) {
-        const result = await ipc.updateElementLayout({
-          sessionId: id,
-          htmlPath: edit.htmlPath,
-          pageId: edit.pageId,
-          selector: edit.selector,
-          x: edit.x,
-          y: edit.y,
-          width: edit.width,
-          height: edit.height,
-          childUpdates: edit.childUpdates
+      // Fill htmlFragment for copied elements (empty at copy time, read from webview now)
+      const filledAddElements = await Promise.all(
+        snapshot.addElements.map(async (el) => {
+          if (el.htmlFragment) return el
+          const selector = el.assignedBlockId
+            ? `body[data-page-id="${el.pageId}"] [data-block-id="${el.assignedBlockId}"]`
+            : ''
+          if (!selector || !previewIframeRef.current) return el
+          try {
+            const html = await (previewIframeRef.current as any).readElementHtml?.(selector)
+            return html ? { ...el, htmlFragment: html } : el
+          } catch {
+            return el
+          }
         })
-        if (!result.success) {
-          throw new Error(t('sessionDetail.layoutSaveFailed'))
-        }
-      }
-      for (const edit of textEdits) {
-        const result = await ipc.updateElementProperties({
-          sessionId: id,
-          htmlPath: edit.htmlPath,
-          pageId: edit.pageId,
-          selector: edit.selector,
-          patch: edit.patch
-        })
-        if (!result.success) {
-          throw new Error(t('sessionDetail.textSaveFailed'))
-        }
-      }
-      setPendingDragEdits((items) => items.filter((item) => item.pageId !== selectedPage.pageId))
-      setPendingTextEdits((items) => items.filter((item) => item.pageId !== selectedPage.pageId))
-      previewIframeRef.current?.clearTextEditorSelection()
+      )
+      // Filter out drag/text edits for elements that are also pending deletion
+      const deletedSelectors = new Set(snapshot.deletes.map((d) => d.selector))
+      const safeDragEdits = snapshot.dragEdits.filter((e) => !deletedSelectors.has(e.selector))
+      const safeTextEdits = snapshot.textEdits.filter((e) => !deletedSelectors.has(e.selector))
+      // Build descriptive prompt for history
+      const parts: string[] = []
+      const ac = snapshot.addElements.length
+      const dc = snapshot.deletes.length
+      const rc = safeDragEdits.length
+      const tc = safeTextEdits.length
+      if (ac > 0) parts.push(`添加 ${ac} 个元素`)
+      if (dc > 0) parts.push(`删除 ${dc} 个元素`)
+      if (rc > 0) parts.push(`调整 ${rc} 个元素位置`)
+      if (tc > 0) parts.push(`编辑 ${tc} 个元素文字`)
+      const prompt = parts.join('、') || '手动调整'
+      const result = await ipc.saveEditBatch({
+        sessionId: id,
+        htmlPath: selectedPage.htmlPath,
+        pageId: selectedPage.pageId,
+        dragEdits: safeDragEdits,
+        textEdits: safeTextEdits,
+        deletes: snapshot.deletes,
+        addElements: filledAddElements,
+        prompt
+      })
+      if (!result.success) throw new Error(t('sessionDetail.layoutSaveFailed'))
+      editHistory.clearPage(selectedPage.pageId)
+      previewIframeRef.current?.clearEditModeSelection()
       setTextSelection(null)
       setTextDraft(EMPTY_ELEMENT_DRAFT)
       useSessionDetailUiStore.getState().bumpThumbnailVersion(selectedPage.pageId)
+      setPreviewRefreshKey((key) => key + 1)
       useSessionDetailUiStore.getState().setInteractionMode('preview')
-      const totalCount = dragEdits.length + textEdits.length
-      await ipc.recordHistorySnapshot({
-        sessionId: id,
-        type: 'edit',
-        scope: 'selector',
-        prompt: t('sessionDetail.manualAdjustHistory'),
-        metadata: {
-          pageId: selectedPage.pageId,
-          dragCount: dragEdits.length,
-          textCount: textEdits.length
-        }
-      })
+      const totalCount = result.dragCount + result.textCount + result.deleteCount + result.addCount
       toastSuccess(t('sessionDetail.adjustmentsSaved', { count: totalCount }))
     } catch (error) {
       toastError(error instanceof Error ? error.message : t('sessionDetail.layoutSaveFailed'))
@@ -933,42 +988,121 @@ export function SessionDetailPage(): React.JSX.Element {
 
   const handleDiscardAllEdits = (): void => {
     if (!selectedPage?.pageId) return
-    const hadDragPending = pendingDragEdits.some((item) => item.pageId === selectedPage.pageId)
-    const hadTextPending = pendingTextEdits.some((item) => item.pageId === selectedPage.pageId)
-    setPendingDragEdits((items) => items.filter((item) => item.pageId !== selectedPage.pageId))
-    setPendingTextEdits((items) => items.filter((item) => item.pageId !== selectedPage.pageId))
-    previewIframeRef.current?.clearTextEditorSelection()
+    const snapshot = editHistory.getSnapshotForPage(selectedPage.pageId)
+    const hadPending = snapshot.dragEdits.length > 0 || snapshot.textEdits.length > 0 || snapshot.deletes.length > 0
+    editHistory.clearPage(selectedPage.pageId)
+    previewIframeRef.current?.clearEditModeSelection()
     setTextSelection(null)
     setTextDraft(EMPTY_ELEMENT_DRAFT)
     setPreviewRefreshKey((key) => key + 1)
     useSessionDetailUiStore.getState().setInteractionMode('preview')
-    if (hadDragPending || hadTextPending) toastInfo(t('sessionDetail.discardedAdjustments'))
+    if (hadPending) toastInfo(t('sessionDetail.discardedAdjustments'))
   }
 
-  const handleTextSelected = (payload: TextEditorSelectionPayload): void => {
+  const handleDeleteElement = (): void => {
+    if (!selectedPage?.htmlPath || !selectedPage.pageId || !textSelection) return
+    const selector = textSelection.selector
+    editHistory.addDelete({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      selector
+    })
+    previewIframeRef.current?.hideElement(selector)
+    previewIframeRef.current?.clearEditModeSelection()
+    setTextSelection(null)
+    setTextDraft(EMPTY_ELEMENT_DRAFT)
+  }
+
+  const handleDeleteBySelector = (selector: string): void => {
+    if (!selectedPage?.htmlPath || !selectedPage.pageId || !selector) return
+    // Commit any pending text edit for the element being deleted
+    if (textSelection && textSelection.selector === selector) {
+      commitCurrentTextEdit()
+    }
+    editHistory.addDelete({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      selector
+    })
+    previewIframeRef.current?.hideElement(selector)
+    previewIframeRef.current?.clearEditModeSelection()
+    setTextSelection(null)
+    setTextDraft(EMPTY_ELEMENT_DRAFT)
+  }
+
+  const handleElementSelected = (payload: EditSelectionPayload): void => {
     // Commit previous edit before switching to new element
     commitCurrentTextEdit()
     setTextSelection(payload)
-    setTextDraft({
-      text: payload.text,
-      color: rgbToHex(payload.style.color),
-      fontSize: fontSizeToNumber(payload.style.fontSize),
-      fontWeight: normalizeFontWeight(payload.style.fontWeight)
-    })
+    const zValue = payload.zIndex !== undefined ? String(payload.zIndex) : '10'
+    if (payload.isText) {
+      setTextDraft({
+        text: payload.text,
+        color: rgbToHex(payload.style.color),
+        fontSize: fontSizeToNumber(payload.style.fontSize),
+        fontWeight: normalizeFontWeight(payload.style.fontWeight),
+        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
+        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
+        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
+        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : '',
+        layoutZIndex: zValue
+      })
+    } else {
+      setTextDraft({
+        ...EMPTY_ELEMENT_DRAFT,
+        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
+        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
+        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
+        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : '',
+        layoutZIndex: zValue
+      })
+    }
   }
 
   const handleTextDraftChange = (draft: ElementEditDraft): void => {
+    // Detect z-index change and persist as a drag edit
+    if (
+      textSelection &&
+      selectedPage?.htmlPath &&
+      selectedPage?.pageId &&
+      draft.layoutZIndex !== textDraft.layoutZIndex
+    ) {
+      const zNum = parseInt(draft.layoutZIndex, 10)
+      if (Number.isFinite(zNum)) {
+        editHistory.upsertDragEdit({
+          pageId: selectedPage.pageId,
+          htmlPath: selectedPage.htmlPath,
+          selector: textSelection.selector,
+          x: textSelection.translateX ?? 0,
+          y: textSelection.translateY ?? 0,
+          width: textSelection.bounds?.width ?? null,
+          height: textSelection.bounds?.height ?? null,
+          childUpdates: [],
+          isAbsoluteMode: false,
+          zIndex: zNum,
+          zIndexOnly: true
+        })
+      }
+    }
     setTextDraft(draft)
     // Live preview in iframe
     if (textSelection && selectedPage?.pageId) {
-      previewIframeRef.current?.liveUpdateTextElement(textSelection.selector, {
-        text: draft.text,
-        style: {
-          color: draft.color,
-          fontSize: draft.fontSize ? `${draft.fontSize}px` : undefined,
-          fontWeight: draft.fontWeight
-        }
-      })
+      // Z-index: use dedicated function to avoid clearing element content
+      const zNum = parseInt(draft.layoutZIndex, 10)
+      if (Number.isFinite(zNum) && draft.layoutZIndex !== textDraft.layoutZIndex) {
+        previewIframeRef.current?.applyZIndex(textSelection.selector, zNum)
+      }
+      // Text & style: only for text elements
+      if (textSelection.isText) {
+        previewIframeRef.current?.liveUpdateElement(textSelection.selector, {
+          text: draft.text,
+          style: {
+            color: draft.color,
+            fontSize: draft.fontSize ? `${draft.fontSize}px` : undefined,
+            fontWeight: draft.fontWeight
+          }
+        })
+      }
     }
   }
 
@@ -983,7 +1117,8 @@ export function SessionDetailPage(): React.JSX.Element {
       textDraft.color === rgbToHex(textSelection.style.color) &&
       textDraft.fontSize === fontSizeToNumber(textSelection.style.fontSize) &&
       textDraft.fontWeight === normalizeFontWeight(textSelection.style.fontWeight)
-    ) return
+    )
+      return
     const patch = {
       text: nextText,
       style: {
@@ -998,26 +1133,155 @@ export function SessionDetailPage(): React.JSX.Element {
       selector: textSelection.selector,
       patch
     }
-    setPendingTextEdits((items) => {
-      const existingIndex = items.findIndex(
-        (item) => item.pageId === entry.pageId && item.selector === entry.selector
-      )
-      if (existingIndex < 0) return [...items, entry]
-      return items.map((item, index) => (index === existingIndex ? entry : item))
-    })
+    editHistory.upsertTextEdit(entry)
+  }
+
+  const replayPendingEdits = (): void => {
+    if (!selectedPage?.pageId) return
+    const snapshot = editHistory.getSnapshotForPage(selectedPage.pageId)
+    const iframe = previewIframeRef.current
+    if (!iframe) return
+    for (const d of snapshot.deletes) {
+      iframe.hideElement(d.selector)
+    }
+    for (const a of snapshot.addElements) {
+      iframe.injectElement(a.parentSelector, a.htmlFragment)
+    }
+    for (const d of snapshot.dragEdits) {
+      iframe.applyDragStyle(d.selector, {
+        x: d.x,
+        y: d.y,
+        width: d.width ?? undefined,
+        height: d.height ?? undefined
+      })
+      if (d.zIndex !== undefined) {
+        iframe.applyZIndex(d.selector, d.zIndex)
+      }
+      if (d.childUpdates.length > 0) {
+        iframe.applyChildUpdates(d.selector, d.childUpdates)
+      }
+    }
+    for (const t of snapshot.textEdits) {
+      iframe.liveUpdateElement(t.selector, {
+        text: t.patch.text,
+        style: t.patch.style
+      })
+    }
+  }
+
+  const handleUndo = (): void => {
+    if (!editHistory.undo()) return
+    previewIframeRef.current?.clearEditModeSelection()
+    setTextSelection(null)
+    setTextDraft(EMPTY_ELEMENT_DRAFT)
+    setPreviewRefreshKey((key) => key + 1)
+  }
+
+  const handleRedo = (): void => {
+    if (!editHistory.redo()) return
+    previewIframeRef.current?.clearEditModeSelection()
+    setTextSelection(null)
+    setTextDraft(EMPTY_ELEMENT_DRAFT)
+    setPreviewRefreshKey((key) => key + 1)
   }
 
   const handleCancelTextEdit = (): void => {
     // Commit current text edit before closing panel
     commitCurrentTextEdit()
-    previewIframeRef.current?.clearTextEditorSelection()
+    previewIframeRef.current?.clearEditModeSelection()
     setTextSelection(null)
     setTextDraft(EMPTY_ELEMENT_DRAFT)
   }
 
+  const handleCopyElement = (): void => {
+    if (!textSelection || !selectedPage?.pageId || !selectedPage.htmlPath) return
+    const blockId = 'select-arcsin1-' + nanoid(8)
+    const newSelector = previewIframeRef.current?.copyElement(textSelection.selector, blockId)
+    if (!newSelector) return
+    const bounds = textSelection.bounds
+    const zValue = textSelection.zIndex !== undefined ? String(textSelection.zIndex + 1) : '10'
+    editHistory.addElement({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      parentSelector: `body[data-page-id="${selectedPage.pageId}"] [data-ppt-guard-root="1"]`,
+      htmlFragment: '',
+      assignedBlockId: blockId,
+      insertIndex: -1
+    })
+    handleElementSelected({
+      selector: newSelector,
+      label: newSelector,
+      elementTag: textSelection.elementTag,
+      elementText: '',
+      isText: false,
+      text: '',
+      style: {},
+      bounds: bounds ? { x: bounds.x + 20, y: bounds.y + 20, width: bounds.width, height: bounds.height } : undefined,
+      translateX: 0,
+      translateY: 0,
+      zIndex: parseInt(zValue, 10),
+      editability: { x: true, y: true, width: true, height: true }
+    })
+  }
+
+  const handleAddElement = (relativePath: string, _fileName: string): void => {
+    if (!id || !selectedPage?.pageId || !selectedPage.htmlPath) return
+    const blockId = 'select-arcsin1-' + nanoid(8)
+    const parentSelector = `body[data-page-id="${selectedPage.pageId}"] [data-ppt-guard-root="1"]`
+    const isVideo = /^\.\/videos\//i.test(relativePath)
+    // Offset each added element so they don't overlap
+    const existingCount = editHistory.addElements.filter(
+      (e) => e.pageId === selectedPage.pageId
+    ).length
+    const offset = existingCount * 30
+    const w = isVideo ? 640 : 400
+    const h = isVideo ? 360 : 300
+    const left = Math.min(400 + offset, 1600 - w - 20)
+    const top = Math.min(200 + offset, 900 - h - 20)
+    const zIdx = 10 + existingCount
+    const htmlFragment = isVideo
+      ? `<video src="${relativePath}" data-block-id="${blockId}" style="position:absolute; left:${left}px; top:${top}px; width:${w}px; height:${h}px; z-index:${zIdx};" controls playsinline></video>`
+      : `<img src="${relativePath}" alt="" data-block-id="${blockId}" style="position:absolute; left:${left}px; top:${top}px; width:${w}px; height:${h}px; z-index:${zIdx}; object-fit:contain;" />`
+    editHistory.addElement({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      parentSelector,
+      htmlFragment,
+      assignedBlockId: blockId,
+      insertIndex: -1
+    })
+    previewIframeRef.current?.injectElement(parentSelector, htmlFragment)
+    // Auto-select the newly added element and show inspector panel
+    const selector = `body[data-page-id="${selectedPage.pageId}"] [data-block-id="${blockId}"]`
+    handleElementSelected({
+      selector,
+      label: selector,
+      elementTag: isVideo ? 'video' : 'img',
+      elementText: '',
+      isText: false,
+      text: '',
+      style: {},
+      bounds: { x: left, y: top, width: w, height: h },
+      translateX: 0,
+      translateY: 0,
+      zIndex: zIdx,
+      editability: { x: true, y: true, width: true, height: true }
+    })
+  }
+
+  const handleUploadAndAdd = async (assetType: 'image' | 'video'): Promise<void> => {
+    if (!id) return
+    const result = await ipc.chooseAndUploadAssets(id, assetType)
+    if (result.cancelled || !result.assets?.length) return
+    const asset = result.assets[0]
+    handleAddElement(asset.relativePath, asset.originalName || asset.fileName)
+  }
+
   return (
     <TooltipProvider delayDuration={180}>
-      <div className="flex h-full min-h-0 flex-col bg-[#f5f1e8] text-foreground">
+      <div
+        className="flex h-full min-h-0 flex-col bg-[#f5f1e8] text-foreground outline-none"
+      >
         <header className="app-drag-region app-titlebar relative shrink-0 bg-[#f5f1e8]/95 shadow-[0_10px_26px_rgba(93,107,77,0.055)] backdrop-blur-xl">
           <div className="absolute left-0 top-0 h-full w-[220px] bg-[#f5f1e8]" />
           <div
@@ -1041,6 +1305,13 @@ export function SessionDetailPage(): React.JSX.Element {
                     void ipc.revealFile(selectedPage.htmlPath, id || undefined)
                   }
                 }}
+                onPresent={() => {
+                  const idx = normalizedOrderedPages.findIndex((p) => p.id === selectedPageId)
+                  void ipc.openPresentation({
+                    sessionId: id || '',
+                    startIndex: idx >= 0 ? idx : 0
+                  })
+                }}
               />
             </div>
           </div>
@@ -1055,6 +1326,8 @@ export function SessionDetailPage(): React.JSX.Element {
             onReorderPages={handleReorderPages}
             onDeletePage={handleDeletePage}
             pageManagementDisabled={isGenerating || isAddingPage || isRetryingSinglePage}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={toggleSidebarCollapsed}
           />
 
           <PreviewStage
@@ -1064,17 +1337,43 @@ export function SessionDetailPage(): React.JSX.Element {
             isGenerating={isGenerating}
             progressLabel={progress?.label}
             previewRefreshKey={previewRefreshKey}
-            pendingEditCount={selectedPagePendingDragCount + pendingTextEdits.filter((item) => item.pageId === selectedPage?.pageId).length}
             isSavingEdits={isSavingEdits}
-            textSelection={textSelection}
-            textDraft={textDraft}
-            onTextDraftChange={handleTextDraftChange}
+            canUndo={editHistory.canUndo()}
+            canRedo={editHistory.canRedo()}
+            hasPendingEdits={
+              selectedPage
+                ? (() => {
+                    const s = editHistory.getSnapshotForPage(selectedPage.pageId)
+                    return s.dragEdits.length > 0 || s.textEdits.length > 0 || s.deletes.length > 0 || s.addElements.length > 0
+                  })()
+                : false
+            }
             onElementMoved={handleElementMoved}
-            onTextSelected={handleTextSelected}
+            onElementSelected={handleElementSelected}
             onCancelTextEdit={handleCancelTextEdit}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onReplayPendingEdits={replayPendingEdits}
             onSaveAllEdits={() => void handleSaveAllEdits()}
             onDiscardAllEdits={handleDiscardAllEdits}
+            onAddFromLibrary={(type) => setAssetPickerOpen(true, type)}
+            onAddFromLocal={(type) => void handleUploadAndAdd(type)}
+            onDeleteRequest={(selector) => {
+              setPendingDeleteSelector(selector)
+              setDeleteConfirmOpen(true)
+            }}
           />
+
+          {interactionMode === 'edit' && textSelection && (
+            <ElementInspectorPanel
+              selection={textSelection}
+              draft={textDraft}
+              onDraftChange={handleTextDraftChange}
+              onClose={handleCancelTextEdit}
+              onCopy={handleCopyElement}
+              onDelete={handleDeleteElement}
+            />
+          )}
 
           {interactionMode === 'ai-inspect' && (
             <MessagePanel
@@ -1100,9 +1399,7 @@ export function SessionDetailPage(): React.JSX.Element {
                   <h3 className="text-base font-semibold text-[#2f3a2a]">
                     {t('sessionDetail.historyTitle')}
                   </h3>
-                  <p className="mt-1 text-xs text-[#8a9a7b]">
-                    {t('sessionDetail.historyRecent')}
-                  </p>
+                  <p className="mt-1 text-xs text-[#8a9a7b]">{t('sessionDetail.historyRecent')}</p>
                 </div>
                 <button
                   type="button"
@@ -1196,9 +1493,7 @@ export function SessionDetailPage(): React.JSX.Element {
               <h3 className="mb-3 text-base font-semibold text-[#2f3a2a]">
                 {t('sessionDetail.addPage')}
               </h3>
-              <p className="mb-3 text-xs text-[#8a9a7b]">
-                {t('sessionDetail.addPageHint')}
-              </p>
+              <p className="mb-3 text-xs text-[#8a9a7b]">{t('sessionDetail.addPageHint')}</p>
               <textarea
                 value={addPageInput}
                 onChange={(e) => setAddPageInput(e.target.value)}
@@ -1332,14 +1627,56 @@ export function SessionDetailPage(): React.JSX.Element {
               <Button
                 type="button"
                 size="sm"
-                onClick={() => rollbackConfirmVersion && void handleRollbackHistory(rollbackConfirmVersion)}
+                onClick={() =>
+                  rollbackConfirmVersion && void handleRollbackHistory(rollbackConfirmVersion)
+                }
                 disabled={Boolean(historyRollbackId)}
               >
-                {historyRollbackId ? t('sessionDetail.historyRollingBack') : t('sessionDetail.historyRollback')}
+                {historyRollbackId
+                  ? t('sessionDetail.historyRollingBack')
+                  : t('sessionDetail.historyRollback')}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <AssetPickerDialog
+          sessionId={id || ''}
+          assetType={assetPickerType}
+          open={assetPickerOpen}
+          onClose={() => setAssetPickerOpen(false)}
+          onConfirm={handleAddElement}
+        />
+        <AlertDialog
+          open={deleteConfirmOpen}
+          onOpenChange={(open) => {
+            setDeleteConfirmOpen(open)
+            if (!open) setPendingDeleteSelector(null)
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogTitle>{t('sessionDetail.deleteElement')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('sessionDetail.deleteElementConfirm')}
+            </AlertDialogDescription>
+            <div className="flex justify-end gap-2">
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-[#c0392b] text-white hover:bg-[#a93226]"
+                onClick={() => {
+                  if (pendingDeleteSelector) {
+                    handleDeleteBySelector(pendingDeleteSelector)
+                  } else {
+                    handleDeleteElement()
+                  }
+                  setPendingDeleteSelector(null)
+                  setDeleteConfirmOpen(false)
+                }}
+              >
+                {t('common.delete')}
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </TooltipProvider>
   )

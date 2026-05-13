@@ -7,6 +7,7 @@ import {
   History,
   Image as ImageIcon,
   Loader2,
+  Monitor,
   Presentation
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
@@ -36,7 +37,8 @@ export function SessionToolbar({
   onExportPptx,
   onOpenHistory,
   onOpenPreview,
-  onRevealFile
+  onRevealFile,
+  onPresent
 }: {
   hasPages: boolean
   historyDisabled?: boolean
@@ -48,6 +50,7 @@ export function SessionToolbar({
   onOpenHistory: () => void
   onOpenPreview: () => void
   onRevealFile: () => void
+  onPresent?: () => void
 }): React.JSX.Element {
   const t = useT()
   const isExportingPdf = useSessionDetailUiStore((state) => state.isExportingPdf)
@@ -146,16 +149,38 @@ export function SessionToolbar({
         </Button>
       )}
       {canPreview && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className={toolbarButtonClass}
-          onClick={onOpenPreview}
-        >
-          <ExternalLink className={toolbarIconClass} />
-          {t('sessionDetail.preview')}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={toolbarButtonClass}
+              onClick={onOpenPreview}
+            >
+              <ExternalLink className={toolbarIconClass} />
+              {t('sessionDetail.preview')}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t('sessionDetail.previewTooltip')}</TooltipContent>
+        </Tooltip>
+      )}
+      {hasPages && onPresent && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={toolbarButtonClass}
+              onClick={onPresent}
+            >
+              <Monitor className={toolbarIconClass} />
+              {t('sessionDetail.present')}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{t('sessionDetail.presentTooltip')}</TooltipContent>
+        </Tooltip>
       )}
       {canRevealFile && (
         <Button

@@ -7,10 +7,11 @@ import type { GenerateChunkEvent, UploadedAsset } from '@shared/generation'
 import { progressLabel, type AppLocale } from '@shared/progress'
 import path from 'path'
 import fs from 'fs'
-import crypto from 'crypto'
+
 import dayjs from 'dayjs'
 import { pathToFileURL } from 'url'
 import { sleep } from './utils'
+import { nanoid } from 'nanoid'
 import {
   buildPageScaffoldHtml,
   buildProjectIndexHtml,
@@ -683,8 +684,9 @@ export function createIpcContext(
         typeof file.name === 'string' && file.name.trim().length > 0
           ? file.name.trim()
           : path.basename(sourcePath)
-      const id = crypto.randomUUID()
-      const fileName = `${buildAssetTimestamp()}-${id.slice(0, 8)}-${toSafeAssetBaseName(originalName)}${ext}`
+      const id = nanoid(10)
+      const baseNameWithoutExt = toSafeAssetBaseName(originalName.replace(/\.[^.]+$/, ''))
+      const fileName = `${baseNameWithoutExt}-${id}${ext}`
       const targetPath = path.join(targetDir, fileName)
       if (!isPathInside(path.resolve(targetPath), targetRoot)) {
         throw new Error('素材目标路径不合法')

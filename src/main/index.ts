@@ -6,7 +6,7 @@ import log from 'electron-log/main.js'
 import dayjs from 'dayjs'
 import { PPTDatabase } from './db/database'
 import { AgentManager } from './agent'
-import { setupIPC } from './ipc'
+import { setupIPC, registerLocalAssetProtocol } from './ipc'
 import { setStyleDb } from './utils/style-skills'
 import type { UpdateAvailablePayload } from '@shared/app-update'
 
@@ -16,9 +16,9 @@ let agentManager: AgentManager | null = null
 let isShuttingDown = false
 
 const APP_NAME = 'OhMyPPT'
-const DEFAULT_WINDOW_WIDTH = 1100
-const DEFAULT_WINDOW_HEIGHT = 760
-const BASE_MIN_WIDTH = 860
+const DEFAULT_WINDOW_WIDTH = 1200
+const DEFAULT_WINDOW_HEIGHT = 780
+const BASE_MIN_WIDTH = 880
 const BASE_MIN_HEIGHT = 680
 const TITLEBAR_HEIGHT = 48
 const TITLEBAR_BACKGROUND = '#f4eddf'
@@ -261,6 +261,8 @@ app.whenReady().then(async () => {
   agentManager = new AgentManager(db)
 
   const mainWindow = createWindow()
+
+  registerLocalAssetProtocol()
 
   if (mainWindow && db && agentManager) {
     setupIPC(mainWindow, db, agentManager)

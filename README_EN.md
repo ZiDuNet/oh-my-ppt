@@ -67,7 +67,12 @@ Output is pure HTML slides: instant browser preview, no extra software, easy to 
 - 🔒 **Local-first** — Runs on your machine, no signup, no upload anxiety  
 - 🎨 **30+ built-in style skills** — Minimal White, Cyber Neon, Bauhaus, Japanese Minimal, Xiaohongshu White, and more, plus custom styles  
 - ✏️ **Chat-based editing** — Tell it “change title color” or “add a data chart” on a specific page, without rebuilding everything  
-- 🖱️ **Visual editing** — Every visible element can be dragged and resized, and every element can be pick and modified with AI
+- 🖱️ **Visual editing** — Every visible element can be dragged and resized, and every element can be picked and modified with AI
+- 📸 **Image and video insertion** — Upload images and videos directly in edit mode, from the asset library or local files
+- 📋 **Element duplication** — One-click copy of any element (text, images, videos, etc.), auto-offset and independently editable
+- ↩️ **Undo and redo** — Undo and redo edits freely before committing, then save as a version history entry
+- 🗑️ **Element deletion** — Delete any element with a click or keyboard shortcut
+- 🖥️ **Presentation mode** — Enter fullscreen presentation with one click, navigate slides with arrow keys or clicks
 - 🎬 **Animation support** — Page transitions plus basic Anime.js v4-powered whole-element motion
 - 🧮 **Math formula rendering** — Display common LaTeX formulas for classes, teaching decks, and technical talks
 - 📄 **Multi-format export** — Export to PDF, batch PNG, or editable PPTX (still being improved)

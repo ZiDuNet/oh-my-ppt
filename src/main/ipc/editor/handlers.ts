@@ -1,0 +1,401 @@
+import { ipcMain } from 'electron'
+import fs from 'fs'
+import * as cheerio from 'cheerio'
+import type { IpcContext } from '../context'
+import { GitHistoryService } from '../../history/git-history-service'
+import {
+  withHtmlFileLock,
+  clampDragValue,
+  clampSizeValue,
+  normalizeChildStyleUpdates,
+  normalizeText,
+  patchDraggedElementStyle,
+  patchElementProperties,
+  ensureElementAnchorInHtml,
+  patchAddElement
+} from './shared'
+
+export function registerEditorHandlers(ctx: IpcContext): void {
+  const { normalizeSessionId, assertPathInAllowedRoots, db, resolveSessionProjectDir } = ctx
+
+  // ─── element-anchor:ensure ──────────────────────────────
+
+  ipcMain.handle('element-anchor:ensure', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('元素锚定参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      htmlPath?: unknown
+      pageId?: unknown
+      selector?: unknown
+      elementTag?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    const selector = typeof record.selector === 'string' ? record.selector.trim() : ''
+    const elementTag = typeof record.elementTag === 'string' ? record.elementTag.trim() : ''
+    if (!htmlPath) throw new Error('页面路径不能为空')
+    if (!pageId) throw new Error('pageId 不能为空')
+    if (!selector) throw new Error('元素 selector 不能为空')
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+    return await withHtmlFileLock(safeHtmlPath, async () => {
+      const html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+      const result = ensureElementAnchorInHtml(html, { pageId, selector, elementTag })
+      if (result.changed) {
+        await fs.promises.writeFile(safeHtmlPath, result.html, 'utf-8')
+      }
+      return {
+        success: true,
+        selector: result.selector,
+        blockId: result.blockId,
+        changed: result.changed
+      }
+    })
+  })
+
+  // ─── element-editor:delete-element ──────────────────────
+
+  ipcMain.handle('element-editor:delete-element', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('删除元素参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      htmlPath?: unknown
+      pageId?: unknown
+      selector?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    const selector = typeof record.selector === 'string' ? record.selector.trim() : ''
+    if (!htmlPath) throw new Error('页面路径不能为空')
+    if (!pageId) throw new Error('pageId 不能为空')
+    if (!selector) throw new Error('删除元素 selector 不能为空')
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+    await withHtmlFileLock(safeHtmlPath, async () => {
+      const html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+      const $ = cheerio.load(html, { scriptingEnabled: false })
+      const target = $(selector).first()
+      if (!target || target.length === 0) {
+        throw new Error('无法定位删除元素：页面内容可能已经变化')
+      }
+      target.remove()
+      await fs.promises.writeFile(safeHtmlPath, $.html(), 'utf-8')
+    })
+    if (sessionId) {
+      const projectDir = await resolveSessionProjectDir(sessionId)
+      await new GitHistoryService(db).recordOperation({
+        sessionId,
+        projectDir,
+        type: 'edit',
+        scope: 'selector',
+        prompt: '删除元素',
+        metadata: { pageId, selector, action: 'delete' }
+      })
+    }
+    return { success: true }
+  })
+
+  // ─── edit:save-batch ────────────────────────────────────
+
+  ipcMain.handle('edit:save-batch', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('批量保存参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      pageId?: unknown
+      htmlPath?: unknown
+      dragEdits?: unknown
+      textEdits?: unknown
+      deletes?: unknown
+      addElements?: unknown
+      prompt?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    if (!sessionId) throw new Error('缺少 sessionId')
+    if (!pageId) throw new Error('缺少 pageId')
+    if (!htmlPath) throw new Error('缺少 htmlPath')
+
+    const rawDrag = Array.isArray(record.dragEdits) ? record.dragEdits : []
+    const rawText = Array.isArray(record.textEdits) ? record.textEdits : []
+    const rawDeletes = Array.isArray(record.deletes) ? record.deletes : []
+    const rawAddElements = Array.isArray(record.addElements) ? record.addElements : []
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+
+    let deleteCount = 0
+    let addCount = 0
+    await withHtmlFileLock(safeHtmlPath, async () => {
+      let html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+
+      // Apply deletes first
+      for (const item of rawDeletes) {
+        if (!item || typeof item !== 'object') continue
+        const d = item as { selector?: unknown }
+        const selector = typeof d.selector === 'string' ? d.selector.trim() : ''
+        if (!selector) continue
+        const $ = cheerio.load(html, { scriptingEnabled: false })
+        const target = $(selector).first()
+        if (target.length > 0) {
+          target.remove()
+          html = $.html()
+          deleteCount++
+        }
+      }
+
+      // Apply add elements (after deletes, before drag/text)
+      for (const item of rawAddElements) {
+        if (!item || typeof item !== 'object') continue
+        const e = item as {
+          parentSelector?: unknown
+          htmlFragment?: unknown
+          insertIndex?: unknown
+        }
+        const parentSelector = typeof e.parentSelector === 'string' ? e.parentSelector.trim() : ''
+        const htmlFragment = typeof e.htmlFragment === 'string' ? e.htmlFragment : ''
+        if (!parentSelector || !htmlFragment) continue
+        const insertIndex = typeof e.insertIndex === 'number' ? e.insertIndex : -1
+        html = patchAddElement(html, parentSelector, htmlFragment, insertIndex)
+        addCount++
+      }
+
+      // Apply drag edits
+      for (const item of rawDrag) {
+        if (!item || typeof item !== 'object') continue
+        const e = item as {
+          selector?: unknown
+          x?: unknown
+          y?: unknown
+          width?: unknown
+          height?: unknown
+          childUpdates?: unknown
+          isAbsoluteMode?: unknown
+          zIndex?: unknown
+          zIndexOnly?: unknown
+        }
+        const selector = typeof e.selector === 'string' ? e.selector.trim() : ''
+        if (!selector) continue
+        const zIndex = typeof e.zIndex === 'number' ? e.zIndex : undefined
+        const zIndexOnly = !!e.zIndexOnly
+        html = patchDraggedElementStyle(
+          html,
+          selector,
+          clampDragValue(e.x),
+          clampDragValue(e.y),
+          clampSizeValue(e.width),
+          clampSizeValue(e.height),
+          normalizeChildStyleUpdates(e.childUpdates),
+          !!e.isAbsoluteMode,
+          zIndex,
+          zIndexOnly
+        )
+      }
+
+      // Apply text edits
+      for (const item of rawText) {
+        if (!item || typeof item !== 'object') continue
+        const e = item as {
+          selector?: unknown
+          patch?: unknown
+        }
+        const selector = typeof e.selector === 'string' ? e.selector.trim() : ''
+        if (!selector) continue
+        const rawPatch =
+          e.patch && typeof e.patch === 'object' ? (e.patch as Record<string, unknown>) : {}
+        const rawStyle =
+          rawPatch.style && typeof rawPatch.style === 'object'
+            ? (rawPatch.style as Record<string, unknown>)
+            : {}
+        html = patchElementProperties(html, selector, {
+          text: typeof rawPatch.text === 'string' ? rawPatch.text : undefined,
+          style: {
+            color: typeof rawStyle.color === 'string' ? rawStyle.color : undefined,
+            fontSize: typeof rawStyle.fontSize === 'string' ? rawStyle.fontSize : undefined,
+            fontWeight: typeof rawStyle.fontWeight === 'string' ? rawStyle.fontWeight : undefined
+          }
+        })
+      }
+
+      await fs.promises.writeFile(safeHtmlPath, html, 'utf-8')
+    })
+
+    // Record history snapshot
+    const projectDir = await resolveSessionProjectDir(sessionId)
+    const dragCount = rawDrag.length
+    const textCount = rawText.length
+    const prompt = typeof record.prompt === 'string' ? record.prompt : '手动调整'
+    await new GitHistoryService(db).recordOperation({
+      sessionId,
+      projectDir,
+      type: 'edit',
+      scope: 'selector',
+      prompt,
+      metadata: { pageId, dragCount, textCount, deleteCount, addCount }
+    })
+
+    return { success: true, dragCount, textCount, deleteCount, addCount }
+  })
+
+  // ─── drag-editor:update-element-layout ──────────────────
+
+  ipcMain.handle('drag-editor:update-element-layout', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('拖拽更新参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      htmlPath?: unknown
+      pageId?: unknown
+      selector?: unknown
+      x?: unknown
+      y?: unknown
+      width?: unknown
+      height?: unknown
+      childUpdates?: unknown
+      isAbsoluteMode?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    const selector = typeof record.selector === 'string' ? record.selector.trim() : ''
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    if (!htmlPath) throw new Error('页面路径不能为空')
+    if (!pageId) throw new Error('pageId 不能为空')
+    if (!selector) throw new Error('拖拽元素 selector 不能为空')
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+    await withHtmlFileLock(safeHtmlPath, async () => {
+      const html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+      const nextHtml = patchDraggedElementStyle(
+        html,
+        selector,
+        clampDragValue(record.x),
+        clampDragValue(record.y),
+        clampSizeValue(record.width),
+        clampSizeValue(record.height),
+        normalizeChildStyleUpdates(record.childUpdates),
+        !!record.isAbsoluteMode
+      )
+      await fs.promises.writeFile(safeHtmlPath, nextHtml, 'utf-8')
+    })
+    return { success: true }
+  })
+
+  // ─── text-editor:update-element-text ────────────────────
+
+  ipcMain.handle('text-editor:update-element-text', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('文字更新参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      htmlPath?: unknown
+      pageId?: unknown
+      selector?: unknown
+      text?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    const selector = typeof record.selector === 'string' ? record.selector.trim() : ''
+    const text = normalizeText(record.text)
+    if (!htmlPath) throw new Error('页面路径不能为空')
+    if (!pageId) throw new Error('pageId 不能为空')
+    if (!selector) throw new Error('文字元素 selector 不能为空')
+    if (!text) throw new Error('文字不能为空')
+    if (text.length > 500) throw new Error('文字不能超过 500 个字符')
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+    await withHtmlFileLock(safeHtmlPath, async () => {
+      const html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+      const nextHtml = patchElementProperties(html, selector, { text })
+      await fs.promises.writeFile(safeHtmlPath, nextHtml, 'utf-8')
+    })
+    return { success: true }
+  })
+
+  // ─── text-editor:update-element-properties ──────────────
+
+  ipcMain.handle('text-editor:update-element-properties', async (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('文字属性更新参数无效')
+    }
+    const record = payload as {
+      sessionId?: unknown
+      htmlPath?: unknown
+      pageId?: unknown
+      selector?: unknown
+      patch?: unknown
+    }
+    const sessionId = normalizeSessionId(record.sessionId)
+    const htmlPath = typeof record.htmlPath === 'string' ? record.htmlPath : ''
+    const pageId = typeof record.pageId === 'string' ? record.pageId.trim() : ''
+    const selector = typeof record.selector === 'string' ? record.selector.trim() : ''
+    const rawPatch =
+      record.patch && typeof record.patch === 'object'
+        ? (record.patch as {
+            text?: unknown
+            style?: unknown
+          })
+        : {}
+    const rawStyle =
+      rawPatch.style && typeof rawPatch.style === 'object'
+        ? (rawPatch.style as Record<string, unknown>)
+        : {}
+    if (!htmlPath) throw new Error('页面路径不能为空')
+    if (!pageId) throw new Error('pageId 不能为空')
+    if (!selector) throw new Error('文字元素 selector 不能为空')
+
+    const safeHtmlPath = await assertPathInAllowedRoots({
+      filePath: htmlPath,
+      mode: 'write',
+      sessionId,
+      htmlOnly: true
+    })
+    await withHtmlFileLock(safeHtmlPath, async () => {
+      const html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
+      const nextHtml = patchElementProperties(html, selector, {
+        text: typeof rawPatch.text === 'string' ? rawPatch.text : undefined,
+        style: {
+          color: typeof rawStyle.color === 'string' ? rawStyle.color : undefined,
+          fontSize: typeof rawStyle.fontSize === 'string' ? rawStyle.fontSize : undefined,
+          fontWeight: typeof rawStyle.fontWeight === 'string' ? rawStyle.fontWeight : undefined
+        }
+      })
+      await fs.promises.writeFile(safeHtmlPath, nextHtml, 'utf-8')
+    })
+    return { success: true }
+  })
+}

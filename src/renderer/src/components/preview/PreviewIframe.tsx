@@ -1,27 +1,45 @@
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
+import { nanoid } from 'nanoid'
 import {
   buildInspectorCleanupScript,
   buildInspectorInjectScript,
   INSPECTOR_CONSOLE_PREFIX
 } from './inspector-script'
 import {
-  buildDragEditorCleanupScript,
-  buildDragEditorInjectScript,
-  DRAG_EDITOR_CONSOLE_PREFIX,
-  type DragEditorMovePayload
-} from './drag-editor-script'
-import {
-  buildTextEditorCleanupScript,
-  buildTextEditorInjectScript,
-  TEXT_EDITOR_CONSOLE_PREFIX
-} from './text-editor-script'
-import type { TextEditorSelectionPayload } from './text-editor-types'
+  buildEditModeCleanupScript,
+  buildEditModeInjectScript,
+  buildEditModeSetPreviewScaleScript,
+  EDIT_MODE_CONSOLE_PREFIX,
+  type EditModeMovePayload,
+  type EditSelectionPayload
+} from './edit-mode-script'
 import { ipc } from '@renderer/lib/ipc'
 
 export interface PreviewIframeHandle {
   patchPageContent: (pageId: string, newHtml: string) => void
-  liveUpdateTextElement: (selector: string, patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string } }) => void
-  clearTextEditorSelection: () => void
+  liveUpdateElement: (
+    selector: string,
+    patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string } }
+  ) => void
+  setElementLayout: (
+    selector: string,
+    layout: { x?: number; y?: number; width?: number; height?: number }
+  ) => void
+  clearEditModeSelection: () => void
+  hideElement: (selector: string) => void
+  showElement: (selector: string) => void
+  applyDragStyle: (
+    selector: string,
+    style: { x: number; y: number; width?: number; height?: number }
+  ) => void
+  applyZIndex: (selector: string, zIndex: number) => void
+  copyElement: (selector: string, newBlockId: string) => string | null
+  readElementHtml: (selector: string) => Promise<string>
+  applyChildUpdates: (
+    selector: string,
+    childUpdates: Array<{ path: number[]; width?: number; height?: number }>
+  ) => void
+  injectElement: (parentSelector: string, htmlFragment: string) => void
 }
 
 export const PreviewIframe = forwardRef<
@@ -34,17 +52,18 @@ export const PreviewIframe = forwardRef<
     pageId?: string
     inspecting?: boolean
     inspectable?: boolean
-    dragEditing?: boolean
-    textEditing?: boolean
+    editMode?: boolean
     onSelectorSelected?: (
       selector: string,
       label: string,
       elementTag?: string,
       elementText?: string
     ) => void
-    onElementMoved?: (payload: DragEditorMovePayload) => void
-    onTextSelected?: (payload: TextEditorSelectionPayload) => void
+    onElementMoved?: (payload: EditModeMovePayload) => void
+    onElementSelected?: (payload: EditSelectionPayload) => void
     onInspectExit?: () => void
+    onDidReload?: () => void
+    onDeleteRequest?: (selector: string) => void
   }
 >(function PreviewIframe(
   {
@@ -54,19 +73,26 @@ export const PreviewIframe = forwardRef<
     pageId,
     inspecting = false,
     inspectable = false,
-    dragEditing = false,
-    textEditing = false,
+    editMode = false,
     onSelectorSelected,
     onElementMoved,
-    onTextSelected,
-    onInspectExit
+    onElementSelected,
+    onInspectExit,
+    onDidReload,
+    onDeleteRequest
   },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const webviewRef = useRef<Electron.WebviewTag | null>(null)
+  const previewScaleRef = useRef(1)
   const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null)
   const [transform, setTransform] = useState('scale(1)')
+  const [previewScale, setPreviewScale] = useState(1)
+
+  useEffect(() => {
+    previewScaleRef.current = previewScale
+  }, [previewScale])
 
   const resolvePageHtmlPath = (inputPath?: string, currentPageId?: string): string | undefined => {
     if (!inputPath) return undefined
@@ -111,7 +137,7 @@ export const PreviewIframe = forwardRef<
     : src
       ? withPreviewParams(src)
       : undefined
-  const pointerEnabled = inspectable && (inspecting || dragEditing || textEditing)
+  const pointerEnabled = inspectable && (inspecting || editMode)
 
   const ensureAnchoredSelector = async (args: {
     selector: string
@@ -167,23 +193,175 @@ export const PreviewIframe = forwardRef<
       `
         )
       },
-      liveUpdateTextElement(selector: string, patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string } }): void {
+      liveUpdateElement(
+        selector: string,
+        patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string }; zIndex?: number }
+      ): void {
         const wv = webviewRef.current
         if (!wv) return
         safeExecuteJavaScript(
           wv,
-          `if (window.__pptTextEditorLiveUpdate) window.__pptTextEditorLiveUpdate(${JSON.stringify(selector)}, ${JSON.stringify(patch)});`
+          `if (window.__pptEditModeLiveUpdate) window.__pptEditModeLiveUpdate(${JSON.stringify(selector)}, ${JSON.stringify(patch)});`
         )
       },
-      clearTextEditorSelection(): void {
+      setElementLayout(
+        selector: string,
+        layout: { x?: number; y?: number; width?: number; height?: number }
+      ): void {
         const wv = webviewRef.current
         if (!wv) return
         safeExecuteJavaScript(
           wv,
-          `if (window.__pptTextEditorClearSelection) window.__pptTextEditorClearSelection();`
+          `if (window.__pptEditModeSetLayout) window.__pptEditModeSetLayout(${JSON.stringify(selector)}, ${JSON.stringify(layout)});`
         )
-      }
-    }),
+      },
+      clearEditModeSelection(): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `if (window.__pptEditModeClearSelection) window.__pptEditModeClearSelection();`
+        )
+      },
+      hideElement(selector: string): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `var __el = document.querySelector(${JSON.stringify(selector)}); if (__el) { __el.style.setProperty('display', 'none', 'important'); __el.setAttribute('data-ppt-pending-delete', '1'); }`
+        )
+      },
+      showElement(selector: string): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `var __el = document.querySelector(${JSON.stringify(selector)}); if (__el && __el.getAttribute('data-ppt-pending-delete') === '1') { __el.style.removeProperty('display'); __el.removeAttribute('data-ppt-pending-delete'); }`
+        )
+      },
+      applyDragStyle(
+        selector: string,
+        style: { x: number; y: number; width?: number; height?: number }
+      ): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `var __el = document.querySelector(${JSON.stringify(selector)}); if (!__el) return;` +
+          `var __pos = __el.style.position || getComputedStyle(__el).position;` +
+          `if (!__pos || __pos === 'static') __el.style.position = 'relative';` +
+          `if (!__el.style.zIndex) __el.style.zIndex = '10';` +
+          `__el.style.setProperty('--ppt-drag-x', ${JSON.stringify(style.x + 'px')});` +
+          `__el.style.setProperty('--ppt-drag-y', ${JSON.stringify(style.y + 'px')});` +
+          `__el.style.translate = 'var(--ppt-drag-x, 0px) var(--ppt-drag-y, 0px)';` +
+          (style.width != null ? `__el.style.width = ${JSON.stringify(style.width + 'px')};` : '') +
+          (style.height != null ? `__el.style.height = ${JSON.stringify(style.height + 'px')};` : '')
+        )
+      },
+      applyZIndex(selector: string, zIndex: number): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `(function(){` +
+          `var __el = document.querySelector(${JSON.stringify(selector)});` +
+          `if (!__el) return;` +
+          `__el.style.setProperty("z-index", String(${zIndex}), "important");` +
+          `})()`
+        )
+      },
+      copyElement(selector: string, newBlockId: string): string | null {
+        const wv = webviewRef.current
+        if (!wv) return null
+        const scope = selector.match(/\[data-page-id="([^"]+)"\]/)?.[1] || ''
+        const root = scope ? `body[data-page-id="${scope}"] [data-ppt-guard-root="1"]` : 'body'
+        const newSelector = scope
+          ? `body[data-page-id="${scope}"] [data-block-id="${newBlockId}"]`
+          : `[data-block-id="${newBlockId}"]`
+        try {
+          // Pre-generate child block IDs with nanoid (same pattern as host code)
+          const childIds = Array.from({ length: 20 }, () => 'select-arcsin1-' + nanoid(8))
+          wv.executeJavaScript(
+            `(function(){` +
+            `var __src = document.querySelector(${JSON.stringify(selector)});` +
+            `if (!__src) return;` +
+            `var __root = document.querySelector(${JSON.stringify(root)});` +
+            `if (!__root) return;` +
+            `var __clone = __src.cloneNode(true);` +
+            `var __childIds = ${JSON.stringify(childIds)};` +
+            `__clone.setAttribute("data-block-id", ${JSON.stringify(newBlockId)});` +
+            `__clone.querySelectorAll("[data-block-id]").forEach(function(c,i){if(__childIds[i])c.setAttribute("data-block-id",__childIds[i]);});` +
+            `__clone.classList.remove("ppt-edit-mode-selected","ppt-edit-mode-hover");` +
+            `var __rect = __src.getBoundingClientRect();` +
+            `var __pos = __src.style.position || getComputedStyle(__src).position;` +
+            `if (__pos === "absolute" || __src.hasAttribute("data-ppt-layout-converted")) {` +
+            `  __clone.style.left = (parseFloat(__src.style.left||"0")+40)+"px";` +
+            `  __clone.style.top = (parseFloat(__src.style.top||"0")+40)+"px";` +
+            `  var __z = parseInt(__src.style.zIndex||"10")||10;` +
+            `  __clone.style.zIndex = String(__z+1);` +
+            `} else {` +
+            `  __clone.style.position = "absolute";` +
+            `  __clone.style.left = (__rect.left+40)+"px";` +
+            `  __clone.style.top = (__rect.top+40)+"px";` +
+            `  __clone.style.width = __rect.width+"px";` +
+            `  __clone.style.height = __rect.height+"px";` +
+            `  __clone.style.zIndex = "20";` +
+            `}` +
+            `__clone.removeAttribute("data-ppt-layout-converted");` +
+            `__clone.removeAttribute("data-ppt-last-vp-x");` +
+            `__clone.removeAttribute("data-ppt-last-vp-y");` +
+            `__root.appendChild(__clone);` +
+            `})()`
+          )
+          return newSelector
+        } catch {
+          return null
+        }
+      },
+      async readElementHtml(selector: string): Promise<string> {
+        const wv = webviewRef.current
+        if (!wv) return ''
+        try {
+          return (await wv.executeJavaScript(
+            `document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`
+          )) || ''
+        } catch {
+          return ''
+        }
+      },
+      applyChildUpdates(
+        selector: string,
+        childUpdates: Array<{ path: number[]; width?: number; height?: number }>
+      ): void {
+        const wv = webviewRef.current
+        if (!wv || childUpdates.length === 0) return
+        const updatesJs = childUpdates
+          .map(
+            (u) =>
+              `{path:${JSON.stringify(u.path)},width:${u.width != null ? u.width : 'null'},height:${u.height != null ? u.height : 'null'}}`
+          )
+          .join(',')
+        safeExecuteJavaScript(
+          wv,
+          `var __parent = document.querySelector(${JSON.stringify(selector)}); if (!__parent) return;` +
+          `var __ups = [${updatesJs}];` +
+          `for (var __i = 0; __i < __ups.length; __i++) {` +
+          `  var __u = __ups[__i]; var __c = __parent;` +
+          `  for (var __j = 0; __j < __u.path.length; __j++) { __c = __c.children[__u.path[__j]]; if (!__c) break; }` +
+          `  if (!__c) continue;` +
+          `  if (__u.width !== null) __c.style.width = __u.width + 'px';` +
+          `  if (__u.height !== null) __c.style.height = __u.height + 'px';` +
+          `}`
+        )
+      },
+      injectElement(parentSelector: string, htmlFragment: string): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `if (window.__pptEditModeInjectElement) window.__pptEditModeInjectElement(${JSON.stringify(parentSelector)}, ${JSON.stringify(htmlFragment)});`
+        )
+      }    }),
     []
   )
 
@@ -210,48 +388,55 @@ export const PreviewIframe = forwardRef<
     }
   }, [inspectable, inspecting, webviewSrc, webviewElement])
 
-  // Text editor effect: handles double-click text editing in edit mode.
+  // Unified edit mode effect: handles click-to-select, drag, and resize.
+  // Use ref for onDidReload to avoid re-running effect on every parent re-render.
+  const onDidReloadRef = useRef(onDidReload)
+  onDidReloadRef.current = onDidReload
+
   useEffect(() => {
     const webview = webviewElement
     if (!webview || !inspectable) return
 
-    const runTextEditorLifecycle = (): void => {
-      if (textEditing) {
-        safeExecuteJavaScript(webview, buildTextEditorInjectScript())
+    const runEditModeLifecycle = (): void => {
+      if (editMode) {
+        safeExecuteJavaScript(webview, buildEditModeInjectScript(previewScaleRef.current))
       } else {
-        safeExecuteJavaScript(webview, buildTextEditorCleanupScript())
+        safeExecuteJavaScript(webview, buildEditModeCleanupScript())
       }
     }
 
-    runTextEditorLifecycle()
-    const handleDomReady = (): void => runTextEditorLifecycle()
+    runEditModeLifecycle()
+    const handleDomReady = (): void => {
+      runEditModeLifecycle()
+      // Fire after script injection so caller can replay edits
+      if (editMode) onDidReloadRef.current?.()
+    }
     webview.addEventListener('dom-ready', handleDomReady as EventListener)
 
     return () => {
       webview.removeEventListener('dom-ready', handleDomReady as EventListener)
-      safeExecuteJavaScript(webview, buildTextEditorCleanupScript())
+      safeExecuteJavaScript(webview, buildEditModeCleanupScript())
     }
-  }, [inspectable, textEditing, webviewSrc, webviewElement])
+  }, [inspectable, editMode, webviewSrc, webviewElement])
 
   useEffect(() => {
     const webview = webviewElement
-    if (!webview || !inspectable) return
+    if (!webview || !inspectable || !editMode) return
+    safeExecuteJavaScript(webview, buildEditModeSetPreviewScaleScript(previewScale))
+  }, [editMode, inspectable, previewScale, webviewElement])
 
-    const runDragEditorLifecycle = (): void => {
-      const script = dragEditing ? buildDragEditorInjectScript() : buildDragEditorCleanupScript()
-      safeExecuteJavaScript(webview, script)
-    }
-
-    runDragEditorLifecycle()
-    const handleDomReady = (): void => runDragEditorLifecycle()
-    webview.addEventListener('dom-ready', handleDomReady as EventListener)
-
-    return () => {
-      webview.removeEventListener('dom-ready', handleDomReady as EventListener)
-      safeExecuteJavaScript(webview, buildDragEditorCleanupScript())
-    }
-  }, [inspectable, dragEditing, webviewSrc, webviewElement])
-
+  // Console message router: inspector + unified edit mode
+  // Use refs for callback props to avoid re-registering listener on every parent re-render
+  const onSelectorSelectedRef = useRef(onSelectorSelected)
+  onSelectorSelectedRef.current = onSelectorSelected
+  const onElementMovedRef = useRef(onElementMoved)
+  onElementMovedRef.current = onElementMoved
+  const onElementSelectedRef = useRef(onElementSelected)
+  onElementSelectedRef.current = onElementSelected
+  const onInspectExitRef = useRef(onInspectExit)
+  onInspectExitRef.current = onInspectExit
+  const onDeleteRequestRef = useRef(onDeleteRequest)
+  onDeleteRequestRef.current = onDeleteRequest
   useEffect(() => {
     const webview = webviewElement
     if (!webview || !inspectable) return
@@ -262,15 +447,12 @@ export const PreviewIframe = forwardRef<
         return
       }
       const isInspectorMessage = payloadText.startsWith(INSPECTOR_CONSOLE_PREFIX)
-      const isDragEditorMessage = payloadText.startsWith(DRAG_EDITOR_CONSOLE_PREFIX)
-      const isTextEditorMessage = payloadText.startsWith(TEXT_EDITOR_CONSOLE_PREFIX)
-      if (!isInspectorMessage && !isDragEditorMessage && !isTextEditorMessage) return
+      const isEditModeMessage = payloadText.startsWith(EDIT_MODE_CONSOLE_PREFIX)
+      if (!isInspectorMessage && !isEditModeMessage) return
 
       const prefixLength = isInspectorMessage
         ? INSPECTOR_CONSOLE_PREFIX.length
-        : isDragEditorMessage
-          ? DRAG_EDITOR_CONSOLE_PREFIX.length
-          : TEXT_EDITOR_CONSOLE_PREFIX.length
+        : EDIT_MODE_CONSOLE_PREFIX.length
       const raw = payloadText.slice(prefixLength).trim()
       if (!raw) return
       try {
@@ -280,6 +462,7 @@ export const PreviewIframe = forwardRef<
           label?: string
           elementTag?: string
           elementText?: string
+          isText?: boolean
           x?: number
           y?: number
           deltaX?: number
@@ -292,48 +475,63 @@ export const PreviewIframe = forwardRef<
             width?: number
             height?: number
           }>
-          oldText?: string
-          newText?: string
-          mode?: string
           text?: string
-          style?: TextEditorSelectionPayload['style']
-          bounds?: TextEditorSelectionPayload['bounds']
+          style?: EditSelectionPayload['style']
+          bounds?: EditSelectionPayload['bounds']
+          translateX?: number
+          translateY?: number
+          zIndex?: number
+          editability?: EditSelectionPayload['editability']
         }
-        if ((isInspectorMessage || isTextEditorMessage) && parsed.type === 'selected' && parsed.selector) {
+
+        // Inspector: element selected (AI mode)
+        if (isInspectorMessage && parsed.type === 'selected' && parsed.selector) {
           void (async () => {
-            const isTextMode = isTextEditorMessage || parsed.mode === 'text-edit'
             const anchoredSelector = await ensureAnchoredSelector({
               selector: parsed.selector || '',
               elementTag: parsed.elementTag,
               elementText: parsed.elementText,
-              reason: isTextMode ? 'text-edit' : 'inspect'
+              reason: 'inspect'
             })
-          if (isTextMode) {
-            onTextSelected?.({
-              selector: anchoredSelector,
-              label: anchoredSelector,
-              elementTag: parsed.elementTag || '',
-              text:
-                typeof parsed.text === 'string'
-                  ? parsed.text
-                  : typeof parsed.elementText === 'string'
-                    ? parsed.elementText
-                    : '',
-              style: parsed.style || {},
-              bounds: parsed.bounds
-            })
-            return
-          }
-          onSelectorSelected?.(
-            anchoredSelector,
-            anchoredSelector,
-            parsed.elementTag,
-            parsed.elementText
-          )
+            onSelectorSelectedRef.current?.(
+              anchoredSelector,
+              anchoredSelector,
+              parsed.elementTag,
+              parsed.elementText
+            )
           })().catch(() => {})
           return
         }
-        if (isDragEditorMessage && parsed.type === 'pre-anchor' && parsed.selector) {
+
+        // Edit mode: element selected (click)
+        if (isEditModeMessage && parsed.type === 'selected' && parsed.selector) {
+          void (async () => {
+            const anchoredSelector = await ensureAnchoredSelector({
+              selector: parsed.selector || '',
+              elementTag: parsed.elementTag,
+              elementText: parsed.elementText,
+              reason: 'drag'
+            })
+            onElementSelectedRef.current?.({
+              selector: anchoredSelector,
+              label: anchoredSelector,
+              elementTag: parsed.elementTag || '',
+              elementText: parsed.elementText || '',
+              isText: Boolean(parsed.isText),
+              text: typeof parsed.text === 'string' ? parsed.text : '',
+              style: parsed.style || {},
+              bounds: parsed.bounds,
+              translateX: Number(parsed.translateX || 0),
+              translateY: Number(parsed.translateY || 0),
+              zIndex: typeof parsed.zIndex === 'number' ? parsed.zIndex : undefined,
+              editability: parsed.editability || undefined
+            })
+          })().catch(() => {})
+          return
+        }
+
+        // Edit mode: pre-anchor request
+        if (isEditModeMessage && parsed.type === 'pre-anchor' && parsed.selector) {
           void (async () => {
             let anchorResult: string = parsed.selector || ''
             try {
@@ -342,58 +540,69 @@ export const PreviewIframe = forwardRef<
                 elementTag: parsed.elementTag,
                 reason: 'drag'
               })
-            } catch { /* fallback to temp selector */ }
+            } catch {
+              /* fallback to temp selector */
+            }
             const wv = webviewRef.current
             if (wv) {
               safeExecuteJavaScript(
                 wv,
-                `if (window.__pptResolveDragAnchor) window.__pptResolveDragAnchor(${JSON.stringify({ selector: anchorResult })});`
+                `if (window.__pptResolveEditModeAnchor) window.__pptResolveEditModeAnchor(${JSON.stringify({ selector: anchorResult })});`
               )
             }
           })().catch(() => {})
           return
         }
-        if (isDragEditorMessage && parsed.type === 'moved' && parsed.selector) {
+
+        // Edit mode: element moved/resized
+        if (isEditModeMessage && parsed.type === 'moved' && parsed.selector) {
           void (async () => {
             const anchoredSelector = await ensureAnchoredSelector({
               selector: parsed.selector || '',
               elementTag: parsed.elementTag,
               reason: 'drag'
             })
-            onElementMoved?.({
-            selector: anchoredSelector,
-            label: anchoredSelector,
-            elementTag: parsed.elementTag || '',
-            x: Number(parsed.x || 0),
-            y: Number(parsed.y || 0),
-            deltaX: Number(parsed.deltaX || 0),
-            deltaY: Number(parsed.deltaY || 0),
-            width: parsed.width === undefined ? undefined : Number(parsed.width),
-            height: parsed.height === undefined ? undefined : Number(parsed.height),
-            scale: parsed.scale === undefined ? undefined : Number(parsed.scale),
-            childUpdates: Array.isArray(parsed.childUpdates)
-              ? parsed.childUpdates
-                  .map((item) => ({
-                    path: Array.isArray(item.path)
-                      ? item.path
-                          .map((value) => Number(value))
-                          .filter((value) => Number.isInteger(value) && value >= 0)
-                      : [],
-                    width: item.width === undefined ? undefined : Number(item.width),
-                    height: item.height === undefined ? undefined : Number(item.height)
-                  }))
-                  .filter(
-                    (item) =>
-                      item.path.length > 0 &&
-                      (item.width !== undefined || item.height !== undefined)
-                  )
-              : undefined
+            onElementMovedRef.current?.({
+              selector: anchoredSelector,
+              label: anchoredSelector,
+              elementTag: parsed.elementTag || '',
+              x: Number(parsed.x || 0),
+              y: Number(parsed.y || 0),
+              deltaX: Number(parsed.deltaX || 0),
+              deltaY: Number(parsed.deltaY || 0),
+              width: parsed.width === undefined ? undefined : Number(parsed.width),
+              height: parsed.height === undefined ? undefined : Number(parsed.height),
+              scale: parsed.scale === undefined ? undefined : Number(parsed.scale),
+              childUpdates: Array.isArray(parsed.childUpdates)
+                ? parsed.childUpdates
+                    .map((item) => ({
+                      path: Array.isArray(item.path)
+                        ? item.path
+                            .map((value) => Number(value))
+                            .filter((value) => Number.isInteger(value) && value >= 0)
+                        : [],
+                      width: item.width === undefined ? undefined : Number(item.width),
+                      height: item.height === undefined ? undefined : Number(item.height)
+                    }))
+                    .filter(
+                      (item) =>
+                        item.path.length > 0 &&
+                        (item.width !== undefined || item.height !== undefined)
+                    )
+                : undefined
             })
           })().catch(() => {})
           return
         }
+
+        // Exit from either mode
         if (parsed.type === 'exit') {
-          onInspectExit?.()
+          onInspectExitRef.current?.()
+        }
+
+        // Edit mode: keyboard delete request
+        if (isEditModeMessage && parsed.type === 'delete-request' && parsed.selector) {
+          onDeleteRequestRef.current?.(parsed.selector)
         }
       } catch {
         // ignore parse error
@@ -406,10 +615,6 @@ export const PreviewIframe = forwardRef<
     }
   }, [
     inspectable,
-    onSelectorSelected,
-    onElementMoved,
-    onTextSelected,
-    onInspectExit,
     pageHtmlPath,
     pageId,
     webviewElement
@@ -425,6 +630,7 @@ export const PreviewIframe = forwardRef<
       const nextScale = Number.isFinite(nextScaleRaw) && nextScaleRaw > 0 ? nextScaleRaw : 1
       const offsetX = Math.max(0, (width - 1600 * nextScale) / 2)
       const offsetY = Math.max(0, (height - 900 * nextScale) / 2)
+      setPreviewScale(nextScale)
       setTransform(`translate(${offsetX}px, ${offsetY}px) scale(${nextScale})`)
     }
 
@@ -443,10 +649,11 @@ export const PreviewIframe = forwardRef<
         <webview
           ref={handleWebviewRef}
           src={webviewSrc}
+          tabIndex={0}
           title={title}
           className={`absolute left-0 top-0 h-[900px] w-[1600px] origin-top-left ${
             pointerEnabled ? 'pointer-events-auto' : 'pointer-events-none'
-          } ${dragEditing ? 'cursor-move' : textEditing ? 'cursor-text' : inspecting ? 'cursor-crosshair' : ''}`}
+          } ${editMode ? 'cursor-move' : inspecting ? 'cursor-crosshair' : ''}`}
           style={{ transform }}
         />
       ) : null}
