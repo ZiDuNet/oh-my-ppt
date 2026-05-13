@@ -33,7 +33,8 @@ export interface PreviewIframeHandle {
     style: { x: number; y: number; width?: number; height?: number }
   ) => void
   applyZIndex: (selector: string, zIndex: number) => void
-  copyElement: (selector: string, newBlockId: string) => Promise<{ selector: string; html: string } | null>
+  copyElement: (selector: string, newBlockId: string) => string | null
+  readElementHtml: (selector: string) => Promise<string>
   applyChildUpdates: (
     selector: string,
     childUpdates: Array<{ path: number[]; width?: number; height?: number }>
@@ -269,7 +270,7 @@ export const PreviewIframe = forwardRef<
           `})()`
         )
       },
-      async copyElement(selector: string, newBlockId: string): Promise<{ selector: string; html: string } | null> {
+      copyElement(selector: string, newBlockId: string): string | null {
         const wv = webviewRef.current
         if (!wv) return null
         const scope = selector.match(/\[data-page-id="([^"]+)"\]/)?.[1] || ''
@@ -277,49 +278,56 @@ export const PreviewIframe = forwardRef<
         const newSelector = scope
           ? `body[data-page-id="${scope}"] [data-block-id="${newBlockId}"]`
           : `[data-block-id="${newBlockId}"]`
-        // Pre-generate child block IDs with nanoid (same pattern as host code)
-        const childIds = Array.from({ length: 20 }, () => 'select-arcsin1-' + nanoid(8))
-        const cloneScript =
-          `(function(){` +
-          `var __src = document.querySelector(${JSON.stringify(selector)});` +
-          `if (!__src) return;` +
-          `var __root = document.querySelector(${JSON.stringify(root)});` +
-          `if (!__root) return;` +
-          `var __clone = __src.cloneNode(true);` +
-          `var __childIds = ${JSON.stringify(childIds)};` +
-          `__clone.setAttribute("data-block-id", ${JSON.stringify(newBlockId)});` +
-          `__clone.querySelectorAll("[data-block-id]").forEach(function(c,i){if(__childIds[i])c.setAttribute("data-block-id",__childIds[i]);});` +
-          `__clone.classList.remove("ppt-edit-mode-selected","ppt-edit-mode-hover");` +
-          `var __rect = __src.getBoundingClientRect();` +
-          `var __pos = __src.style.position || getComputedStyle(__src).position;` +
-          `if (__pos === "absolute" || __src.hasAttribute("data-ppt-layout-converted")) {` +
-          `  __clone.style.left = (parseFloat(__src.style.left||"0")+40)+"px";` +
-          `  __clone.style.top = (parseFloat(__src.style.top||"0")+40)+"px";` +
-          `  var __z = parseInt(__src.style.zIndex||"10")||10;` +
-          `  __clone.style.zIndex = String(__z+1);` +
-          `} else {` +
-          `  __clone.style.position = "absolute";` +
-          `  __clone.style.left = (__rect.left+40)+"px";` +
-          `  __clone.style.top = (__rect.top+40)+"px";` +
-          `  __clone.style.width = __rect.width+"px";` +
-          `  __clone.style.height = __rect.height+"px";` +
-          `  __clone.style.zIndex = "20";` +
-          `}` +
-          `__clone.removeAttribute("data-ppt-layout-converted");` +
-          `__clone.removeAttribute("data-ppt-last-vp-x");` +
-          `__clone.removeAttribute("data-ppt-last-vp-y");` +
-          `__root.appendChild(__clone);` +
-          `})()`
-        // Fire-and-forget: always create the clone immediately
-        safeExecuteJavaScript(wv, cloneScript)
-        // Read back the HTML for persistence (best-effort)
-        let html = ''
         try {
-          html = await wv.executeJavaScript(
-            `document.querySelector(${JSON.stringify(newSelector)})?.outerHTML || ''`
-          ) || ''
-        } catch { /* best-effort */ }
-        return { selector: newSelector, html }
+          // Pre-generate child block IDs with nanoid (same pattern as host code)
+          const childIds = Array.from({ length: 20 }, () => 'select-arcsin1-' + nanoid(8))
+          wv.executeJavaScript(
+            `(function(){` +
+            `var __src = document.querySelector(${JSON.stringify(selector)});` +
+            `if (!__src) return;` +
+            `var __root = document.querySelector(${JSON.stringify(root)});` +
+            `if (!__root) return;` +
+            `var __clone = __src.cloneNode(true);` +
+            `var __childIds = ${JSON.stringify(childIds)};` +
+            `__clone.setAttribute("data-block-id", ${JSON.stringify(newBlockId)});` +
+            `__clone.querySelectorAll("[data-block-id]").forEach(function(c,i){if(__childIds[i])c.setAttribute("data-block-id",__childIds[i]);});` +
+            `__clone.classList.remove("ppt-edit-mode-selected","ppt-edit-mode-hover");` +
+            `var __rect = __src.getBoundingClientRect();` +
+            `var __pos = __src.style.position || getComputedStyle(__src).position;` +
+            `if (__pos === "absolute" || __src.hasAttribute("data-ppt-layout-converted")) {` +
+            `  __clone.style.left = (parseFloat(__src.style.left||"0")+40)+"px";` +
+            `  __clone.style.top = (parseFloat(__src.style.top||"0")+40)+"px";` +
+            `  var __z = parseInt(__src.style.zIndex||"10")||10;` +
+            `  __clone.style.zIndex = String(__z+1);` +
+            `} else {` +
+            `  __clone.style.position = "absolute";` +
+            `  __clone.style.left = (__rect.left+40)+"px";` +
+            `  __clone.style.top = (__rect.top+40)+"px";` +
+            `  __clone.style.width = __rect.width+"px";` +
+            `  __clone.style.height = __rect.height+"px";` +
+            `  __clone.style.zIndex = "20";` +
+            `}` +
+            `__clone.removeAttribute("data-ppt-layout-converted");` +
+            `__clone.removeAttribute("data-ppt-last-vp-x");` +
+            `__clone.removeAttribute("data-ppt-last-vp-y");` +
+            `__root.appendChild(__clone);` +
+            `})()`
+          )
+          return newSelector
+        } catch {
+          return null
+        }
+      },
+      async readElementHtml(selector: string): Promise<string> {
+        const wv = webviewRef.current
+        if (!wv) return ''
+        try {
+          return (await wv.executeJavaScript(
+            `document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`
+          )) || ''
+        } catch {
+          return ''
+        }
       },
       applyChildUpdates(
         selector: string,

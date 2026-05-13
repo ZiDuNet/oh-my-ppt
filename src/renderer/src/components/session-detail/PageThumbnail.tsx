@@ -23,10 +23,11 @@ export const PageThumbnail = memo(function PageThumbnail({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           onClick={onSelect ? () => onSelect(page.id) : undefined}
-          disabled={!onSelect}
+          aria-disabled={!onSelect}
           className={cn(
             'group relative block w-full min-w-0 overflow-hidden rounded-[1.25rem] p-1.5 text-left transition-all duration-200',
             onSelect ? 'cursor-pointer' : 'cursor-default opacity-60',
@@ -82,7 +83,7 @@ export const PageThumbnail = memo(function PageThumbnail({
             {page.title}
           </div>
           {actions}
-        </button>
+        </div>
       </TooltipTrigger>
       <TooltipContent side="right" align="start">
         <div className="max-w-[240px]">

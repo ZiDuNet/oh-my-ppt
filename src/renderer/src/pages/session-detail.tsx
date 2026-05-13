@@ -928,6 +928,22 @@ export function SessionDetailPage(): React.JSX.Element {
     }
     setIsSavingEdits(true)
     try {
+      // Fill htmlFragment for copied elements (empty at copy time, read from webview now)
+      const filledAddElements = await Promise.all(
+        snapshot.addElements.map(async (el) => {
+          if (el.htmlFragment) return el
+          const selector = el.assignedBlockId
+            ? `body[data-page-id="${el.pageId}"] [data-block-id="${el.assignedBlockId}"]`
+            : ''
+          if (!selector || !previewIframeRef.current) return el
+          try {
+            const html = await (previewIframeRef.current as any).readElementHtml?.(selector)
+            return html ? { ...el, htmlFragment: html } : el
+          } catch {
+            return el
+          }
+        })
+      )
       // Filter out drag/text edits for elements that are also pending deletion
       const deletedSelectors = new Set(snapshot.deletes.map((d) => d.selector))
       const safeDragEdits = snapshot.dragEdits.filter((e) => !deletedSelectors.has(e.selector))
@@ -950,7 +966,7 @@ export function SessionDetailPage(): React.JSX.Element {
         dragEdits: safeDragEdits,
         textEdits: safeTextEdits,
         deletes: snapshot.deletes,
-        addElements: snapshot.addElements,
+        addElements: filledAddElements,
         prompt
       })
       if (!result.success) throw new Error(t('sessionDetail.layoutSaveFailed'))
@@ -1177,24 +1193,24 @@ export function SessionDetailPage(): React.JSX.Element {
     setTextDraft(EMPTY_ELEMENT_DRAFT)
   }
 
-  const handleCopyElement = async (): Promise<void> => {
+  const handleCopyElement = (): void => {
     if (!textSelection || !selectedPage?.pageId || !selectedPage.htmlPath) return
     const blockId = 'select-arcsin1-' + nanoid(8)
-    const result = await previewIframeRef.current?.copyElement(textSelection.selector, blockId)
-    if (!result) return
+    const newSelector = previewIframeRef.current?.copyElement(textSelection.selector, blockId)
+    if (!newSelector) return
     const bounds = textSelection.bounds
     const zValue = textSelection.zIndex !== undefined ? String(textSelection.zIndex + 1) : '10'
     editHistory.addElement({
       pageId: selectedPage.pageId,
       htmlPath: selectedPage.htmlPath,
       parentSelector: `body[data-page-id="${selectedPage.pageId}"] [data-ppt-guard-root="1"]`,
-      htmlFragment: result.html,
+      htmlFragment: '',
       assignedBlockId: blockId,
       insertIndex: -1
     })
     handleElementSelected({
-      selector: result.selector,
-      label: result.selector,
+      selector: newSelector,
+      label: newSelector,
       elementTag: textSelection.elementTag,
       elementText: '',
       isText: false,
