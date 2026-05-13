@@ -79,13 +79,13 @@ export function Sidebar(): React.JSX.Element {
       <div className="px-4 pb-4">
         <Link
           to="/"
-          className="flex items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-[#6f8159] to-[#4f613f] px-4 py-3 text-sm font-medium text-white shadow-lg shadow-[#5d6b4d]/30 transition-all hover:translate-y-[-1px]"
+          className="flex items-center justify-between gap-2 rounded-xl bg-gradient-to-r from-[#6f8159] to-[#4f613f] px-3 py-2.5 text-[12px] font-medium text-white shadow-lg shadow-[#5d6b4d]/30 transition-all hover:translate-y-[-1px]"
         >
-          <span className="flex items-center gap-3">
-            <Plus className="w-4 h-4" />
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            <Plus className="h-3.5 w-3.5 shrink-0" />
             {t('nav.newPresentation')}
           </span>
-          {appVersion ? <span className="text-[12px] font-normal text-white/80">v{appVersion}</span> : null}
+          {appVersion ? <span className="shrink-0 text-[10px] font-normal text-white/70">v{appVersion}</span> : null}
         </Link>
       </div>
     </aside>

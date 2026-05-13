@@ -138,7 +138,7 @@ export const PageSidebar = memo(function PageSidebar({
 
   return (
     <aside
-      className={`relative flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#f5f1e8] pb-3 pt-3 shadow-[inset_-16px_0_30px_rgba(93,107,77,0.045)] transition-[width] duration-300 ${collapsed ? 'w-[52px]' : 'w-[220px]'}`}
+      className={`relative flex min-h-0 shrink-0 flex-col overflow-hidden bg-[#f5f1e8] pb-3 pt-3 shadow-[inset_-16px_0_30px_rgba(93,107,77,0.045)] transition-[width] duration-300 ${collapsed ? 'w-[48px]' : 'w-[192px]'}`}
     >
       <div className={`flex min-h-0 flex-1 flex-col ${collapsed ? 'px-1' : 'px-2.5'}`}>
       {collapsed ? (
