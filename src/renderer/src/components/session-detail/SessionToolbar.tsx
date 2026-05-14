@@ -3,7 +3,6 @@ import {
   ExternalLink,
   FileDown,
   FileSearch,
-  FileText,
   History,
   Image as ImageIcon,
   Loader2,
@@ -46,7 +45,7 @@ export function SessionToolbar({
   canRevealFile: boolean
   onExportPdf: () => void
   onExportPng: () => void
-  onExportPptx: (options?: { exportImages?: boolean; exportShapes?: boolean }) => void
+  onExportPptx: (options?: { imageOnly?: boolean }) => void
   onOpenHistory: () => void
   onOpenPreview: () => void
   onRevealFile: () => void
@@ -99,17 +98,13 @@ export function SessionToolbar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-[14rem]">
-            <DropdownMenuItem onClick={() => onExportPptx({ exportImages: true, exportShapes: true })}>
+            <DropdownMenuItem onClick={() => onExportPptx()}>
               <Presentation className={dropdownItemIconClass} />
-              {t('sessionDetail.exportPptxDefault')}
+              {t('sessionDetail.exportPptxEditable')}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onExportPptx({ exportImages: false, exportShapes: false })}>
-              <FileText className={dropdownItemIconClass} />
-              {t('sessionDetail.exportPptxTextOnly')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onExportPptx({ exportImages: true, exportShapes: false })}>
+            <DropdownMenuItem onClick={() => onExportPptx({ imageOnly: true })}>
               <ImageIcon className={dropdownItemIconClass} />
-              {t('sessionDetail.exportPptxWithImages')}
+              {t('sessionDetail.exportPptxImageOnly')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

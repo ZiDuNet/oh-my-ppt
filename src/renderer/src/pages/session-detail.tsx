@@ -835,17 +835,22 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }
 
-  const handleExportPptx = async (options?: {
-    exportImages?: boolean
-    exportShapes?: boolean
-  }): Promise<void> => {
+  const handleExportPptx = async (options?: { imageOnly?: boolean }): Promise<void> => {
     const detailState = useSessionDetailUiStore.getState()
     if (!id || detailState.isExportingPptx) return
+    const imageOnly = options?.imageOnly === true
     detailState.setIsExportingPptx(true)
-    toastInfo(t('sessionDetail.pptxPreparing'), {
-      description: t('sessionDetail.pptxPreparingDescription'),
-      duration: 8000
-    })
+    toastInfo(
+      t(imageOnly ? 'sessionDetail.pptxPreparingImage' : 'sessionDetail.pptxPreparingEditable'),
+      {
+        description: t(
+          imageOnly
+            ? 'sessionDetail.pptxPreparingImageDescription'
+            : 'sessionDetail.pptxPreparingEditableDescription'
+        ),
+        duration: 8000
+      }
+    )
     try {
       const result = await ipc.exportPptx(id, options)
       if (result.cancelled) {
@@ -864,7 +869,9 @@ export function SessionDetailPage(): React.JSX.Element {
         return
       }
       toastSuccess(t('sessionDetail.pptxExported', { count: result.pageCount || 0 }), {
-        description: t('sessionDetail.pptxEditableDescription')
+        description: t(
+          imageOnly ? 'sessionDetail.pptxImageDescription' : 'sessionDetail.pptxEditableDescription'
+        )
       })
     } catch (error) {
       toastError(error instanceof Error ? error.message : t('sessionDetail.exportFailed'))

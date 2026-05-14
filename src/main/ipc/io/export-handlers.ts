@@ -5,22 +5,31 @@ import path from 'path'
 import { PDFDocument } from 'pdf-lib'
 import type { IpcContext } from '../context'
 import { writeHtmlToPptx, type HtmlToPptxSlide } from '../../utils/html-pptx'
-import { extractHtmlPageToPptxSlide } from '../../utils/html-pptx/renderer'
+import {
+  captureHtmlPageToPptxImageSlide,
+  extractHtmlPageToPptxSlide
+} from '../../utils/html-pptx/renderer'
 
-type ExportPayload = {
+type PptxExportPayload = {
   sessionId?: unknown
+  imageOnly?: unknown
 }
 
 const parseSessionId = (payload: unknown): string => {
   if (
     payload &&
     typeof payload === 'object' &&
-    typeof (payload as ExportPayload).sessionId === 'string'
+    typeof (payload as PptxExportPayload).sessionId === 'string'
   ) {
     return String((payload as { sessionId?: string }).sessionId).trim()
   }
   return typeof payload === 'string' ? payload.trim() : ''
 }
+
+const parseImageOnly = (payload: unknown): boolean =>
+  Boolean(
+    payload && typeof payload === 'object' && (payload as PptxExportPayload).imageOnly === true
+  )
 
 const sanitizeExportBaseName = (value: string, fallback: string): string =>
   value.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || fallback
@@ -210,13 +219,18 @@ export function registerExportHandlers(ctx: IpcContext): void {
     if (!sessionId) {
       throw new Error('sessionId 不能为空')
     }
+    const imageOnly = parseImageOnly(payload)
 
     const { session, pages, projectDir } = await resolveSessionPageFiles(sessionId)
     const sessionTitle =
       typeof session.title === 'string' && session.title.trim().length > 0
         ? session.title.trim()
         : `ohmyppt-${sessionId}`
-    const sanitizedBaseName = sanitizeExportBaseName(sessionTitle, `ohmyppt-${sessionId}`)
+    const prefix = imageOnly ? '【图片版】' : '【可编辑版】'
+    const sanitizedBaseName = sanitizeExportBaseName(
+      `${prefix}${sessionTitle}`,
+      `ohmyppt-${sessionId}`
+    )
 
     const ownerWindow =
       BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -232,31 +246,39 @@ export function registerExportHandlers(ctx: IpcContext): void {
     }
 
     const warnings: string[] = []
-    let pagesWithoutText = 0
 
     try {
       const slides: HtmlToPptxSlide[] = []
       for (const page of pages) {
+        const mode = imageOnly ? 'image' : 'editable'
         log.info('[export:pptx] extract page', {
           sessionId,
           pageId: page.pageId,
-          htmlPath: page.htmlPath
+          htmlPath: page.htmlPath,
+          mode
         })
-        const extracted = await extractHtmlPageToPptxSlide({
-          page,
-          timeoutMs: EXPORT_PAGE_READY_TIMEOUT_MS,
-          settleMs: EXPORT_CAPTURE_SETTLE_MS,
-          waitForPrintReadySignal
-        })
+        const extracted = imageOnly
+          ? await captureHtmlPageToPptxImageSlide({
+              page,
+              timeoutMs: EXPORT_PAGE_READY_TIMEOUT_MS,
+              settleMs: EXPORT_CAPTURE_SETTLE_MS,
+              waitForPrintReadySignal
+            })
+          : await extractHtmlPageToPptxSlide({
+              page,
+              timeoutMs: EXPORT_PAGE_READY_TIMEOUT_MS,
+              settleMs: EXPORT_CAPTURE_SETTLE_MS,
+              waitForPrintReadySignal
+            })
         slides.push(extracted.slide)
         if (extracted.warning) warnings.push(extracted.warning)
-        if (extracted.slide.texts.length === 0) {
-          pagesWithoutText += 1
-        }
       }
 
-      if (pagesWithoutText > 0) {
-        warnings.push(`${pages.length} 页中有 ${pagesWithoutText} 页未提取到可编辑文本。`)
+      if (!imageOnly) {
+        const pagesWithoutText = slides.filter((s) => s.texts.length === 0).length
+        if (pagesWithoutText > 0) {
+          warnings.push(`${pages.length} 页中有 ${pagesWithoutText} 页未提取到可编辑文本。`)
+        }
       }
 
       await writeHtmlToPptx(saveResult.filePath, {
@@ -273,7 +295,8 @@ export function registerExportHandlers(ctx: IpcContext): void {
         sessionId,
         pageCount: slides.length,
         filePath: saveResult.filePath,
-        warningCount: warnings.length
+        warningCount: warnings.length,
+        imageOnly
       })
       shell.showItemInFolder(saveResult.filePath)
       return {

@@ -436,14 +436,16 @@ Business presentations, product introductions, project summaries — formal but 
     exportPngDescription:
       'All pages will be saved as high-resolution images, suitable for docs, Notion, or social posts.',
     pngExported: 'PNG exported ({count} images)',
-    pptxPreparing: 'Preparing editable PPTX',
-    pptxPreparingDescription:
-      'The export will preserve layout, colors, and images while keeping key text editable where possible.',
+    pptxPreparingEditable: 'Preparing editable PPTX',
+    pptxPreparingEditableDescription:
+      'Preserving all elements editable where possible, including text, shapes, images, and tables.',
+    pptxPreparingImage: 'Preparing image PPTX',
+    pptxPreparingImageDescription: 'Each page is exported as a high-resolution image for pixel-perfect fidelity.',
     pptxExported: 'PPTX exported ({count} pages)',
-    pptxEditableDescription: 'Layout and editable text were preserved where possible.',
-    exportPptxDefault: 'Full Export',
-    exportPptxTextOnly: 'Text Only',
-    exportPptxWithImages: 'Text + Images',
+    pptxEditableDescription: 'All elements were preserved editable where possible.',
+    pptxImageDescription: 'Each page is a high-resolution image for pixel-perfect fidelity.',
+    exportPptxEditable: 'Editable Export',
+    exportPptxImageOnly: 'Image Export',
     history: 'Version History',
     historyTooltip: 'Go back to any of the latest 10 changed versions.',
     historyTitle: 'History versions',

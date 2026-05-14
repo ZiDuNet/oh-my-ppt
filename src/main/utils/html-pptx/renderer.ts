@@ -207,12 +207,7 @@ const capturePptxBackgroundWithRetry = async (
   }
 }
 
-export const extractHtmlPageToPptxSlide = async ({
-  page,
-  timeoutMs,
-  settleMs,
-  waitForPrintReadySignal
-}: HtmlPageToPptxSlideOptions): Promise<HtmlPageToPptxSlideResult> => {
+const createPptxBrowserWindow = (): BrowserWindow => {
   const win = new BrowserWindow({
     show: false,
     width: PPTX_CAPTURE_WIDTH,
@@ -226,41 +221,130 @@ export const extractHtmlPageToPptxSlide = async ({
       offscreen: false
     }
   })
+  win.webContents.setZoomFactor(1)
+  win.setContentSize(PPTX_CAPTURE_WIDTH, PPTX_CAPTURE_HEIGHT)
+  return win
+}
 
-  try {
-    win.webContents.setZoomFactor(1)
-    win.setContentSize(PPTX_CAPTURE_WIDTH, PPTX_CAPTURE_HEIGHT)
+const loadAndFreezePptxPage = async (
+  win: BrowserWindow,
+  page: HtmlPageForPptx,
+  timeoutMs: number,
+  settleMs: number,
+  waitForPrintReadySignal: HtmlPageToPptxSlideOptions['waitForPrintReadySignal']
+): Promise<{ timedOut: boolean }> => {
+  const pageUrl = new URL(pathToFileURL(page.htmlPath).toString())
+  pageUrl.searchParams.set('fit', 'off')
+  pageUrl.searchParams.set('print', '1')
+  pageUrl.searchParams.set('export', '1')
+  pageUrl.searchParams.set('pageId', page.pageId)
+  pageUrl.searchParams.set('printTimeoutMs', String(timeoutMs))
+  pageUrl.searchParams.set('_ts', String(Date.now()))
 
-    const pageUrl = new URL(pathToFileURL(page.htmlPath).toString())
-    pageUrl.searchParams.set('fit', 'off')
-    pageUrl.searchParams.set('print', '1')
-    pageUrl.searchParams.set('export', '1')
-    pageUrl.searchParams.set('pageId', page.pageId)
-    pageUrl.searchParams.set('printTimeoutMs', String(timeoutMs))
-    pageUrl.searchParams.set('_ts', String(Date.now()))
+  const readyWaitPromise = waitForPrintReadySignal({
+    win,
+    pageId: page.pageId,
+    timeoutMs
+  })
 
-    const readyWaitPromise = waitForPrintReadySignal({
-      win,
+  await win.loadURL(pageUrl.toString())
+  await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
+  const readyResult = await readyWaitPromise
+  if (readyResult.timedOut) {
+    log.warn('[export:pptx] print ready timeout', {
       pageId: page.pageId,
+      htmlPath: page.htmlPath,
       timeoutMs
     })
+  }
 
-    await win.loadURL(pageUrl.toString())
-    await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
-    const readyResult = await readyWaitPromise
-    if (readyResult.timedOut) {
-      log.warn('[export:pptx] a print rc ready timeout sin1', {
-        pageId: page.pageId,
-        htmlPath: page.htmlPath,
-        timeoutMs
-      })
+  await sleep(settleMs)
+  await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
+  await sleep(450)
+  await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
+  await sleep(80)
+
+  return readyResult
+}
+
+const captureFullPage = async (win: BrowserWindow): Promise<NativeImage> => {
+  await win.webContents.executeJavaScript(WAIT_FOR_PPTX_CAPTURE_FRAME_SCRIPT, true)
+  await sleep(process.platform === 'win32' ? 180 : 80)
+  await win.webContents.executeJavaScript(WAIT_FOR_PPTX_CAPTURE_FRAME_SCRIPT, true)
+  return win.webContents.capturePage({
+    x: 0,
+    y: 0,
+    width: PPTX_CAPTURE_WIDTH,
+    height: PPTX_CAPTURE_HEIGHT
+  })
+}
+
+export const captureHtmlPageToPptxImageSlide = async ({
+  page,
+  timeoutMs,
+  settleMs,
+  waitForPrintReadySignal
+}: HtmlPageToPptxSlideOptions): Promise<HtmlPageToPptxSlideResult> => {
+  const win = createPptxBrowserWindow()
+
+  try {
+    const readyResult = await loadAndFreezePptxPage(
+      win,
+      page,
+      timeoutMs,
+      settleMs,
+      waitForPrintReadySignal
+    )
+
+    const image = await captureFullPage(win)
+    const png = image.toPNG()
+
+    const slide: HtmlToPptxSlide = {
+      title: page.title,
+      texts: [],
+      shapes: [],
+      images: [],
+      tables: [],
+      backgroundImage: {
+        dataUri: `data:image/png;base64,${png.toString('base64')}`,
+        mimeType: 'image/png',
+        x: 0,
+        y: 0,
+        w: PPTX_SLIDE_WIDTH_IN,
+        h: PPTX_SLIDE_HEIGHT_IN,
+        alt: page.title
+      }
     }
 
-    await sleep(settleMs)
-    await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
-    await sleep(450)
-    await win.webContents.executeJavaScript(FREEZE_PAGE_FOR_PPTX_SCRIPT, true)
-    await sleep(80)
+    return {
+      slide,
+      warning: readyResult.timedOut
+        ? `页面 ${page.pageId} 未收到打印就绪信号，已按当前状态导出`
+        : undefined
+    }
+  } finally {
+    if (!win.isDestroyed()) {
+      win.destroy()
+    }
+  }
+}
+
+export const extractHtmlPageToPptxSlide = async ({
+  page,
+  timeoutMs,
+  settleMs,
+  waitForPrintReadySignal
+}: HtmlPageToPptxSlideOptions): Promise<HtmlPageToPptxSlideResult> => {
+  const win = createPptxBrowserWindow()
+
+  try {
+    const readyResult = await loadAndFreezePptxPage(
+      win,
+      page,
+      timeoutMs,
+      settleMs,
+      waitForPrintReadySignal
+    )
 
     const extracted = await win.webContents.executeJavaScript(
       buildHtmlToPptxExtractScript({
