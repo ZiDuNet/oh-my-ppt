@@ -429,7 +429,7 @@ export const zh = {
     exportPptxEditable: '可编辑版导出',
     exportPptxImageOnly: '纯图版导出',
     exportSlidePack: '打包预览',
-    exportSlidePackTooltip: '打包为独立可执行文件，双击即可在浏览器中预览',
+    exportSlidePackTooltip: '导出为单个可执行文件（类似 PPTX），随时随地双击即可打开预览，无需安装任何软件',
     slidePackPreparing: '正在打包预览文件...',
     slidePackPreparingDescription: '正在将演示打包为可独立运行的可执行文件',
     slidePackExported: '打包完成',

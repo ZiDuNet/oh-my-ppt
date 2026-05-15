@@ -524,6 +524,15 @@ function buildSlideXml(
     if (xml) shapes.push(xml)
   }
 
+  // Overlay images (rendered on top of everything, e.g. KaTeX formula screenshots)
+  for (const img of slide.overlayImages || []) {
+    nextId++
+    const rel = imageRels.get(img.dataUri)
+    if (rel) {
+      shapes.push(buildImagePic(nextId, rel.rId, img))
+    }
+  }
+
   return `${XML_HEADER}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
        xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -780,6 +789,7 @@ export const writePptxDocument = async (
   for (const slide of slides) {
     if (slide.backgroundImage) collectImage(slide.backgroundImage.dataUri)
     for (const img of slide.images || []) collectImage(img.dataUri)
+    for (const img of slide.overlayImages || []) collectImage(img.dataUri)
   }
 
   // 2. Build per-slide image rels
@@ -799,6 +809,7 @@ export const writePptxDocument = async (
 
     if (slide.backgroundImage) addRel(slide.backgroundImage.dataUri)
     for (const img of slide.images || []) addRel(img.dataUri)
+    for (const img of slide.overlayImages || []) addRel(img.dataUri)
 
     slideImageRels.push(relsMap)
   }

@@ -106,6 +106,8 @@ export interface HtmlToPptxSlide {
   shapes?: HtmlToPptxShape[]
   images?: HtmlToPptxImage[]
   tables?: HtmlToPptxTable[]
+  /** Overlay images rendered on top of shapes/texts (e.g. KaTeX formula screenshots) */
+  overlayImages?: HtmlToPptxImage[]
 }
 
 export interface HtmlToPptxDocument {

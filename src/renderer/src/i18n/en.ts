@@ -447,7 +447,7 @@ Business presentations, product introductions, project summaries — formal but 
     exportPptxEditable: 'Editable Export',
     exportPptxImageOnly: 'Image Export',
     exportSlidePack: 'Pack Preview',
-    exportSlidePackTooltip: 'Package as a standalone executable, double-click to preview in browser',
+    exportSlidePackTooltip: 'Export as a single executable file (like PPTX) — double-click to preview anytime, anywhere, no installation needed',
     slidePackPreparing: 'Packaging preview...',
     slidePackPreparingDescription: 'Building standalone executable for browser preview',
     slidePackExported: 'Pack complete',

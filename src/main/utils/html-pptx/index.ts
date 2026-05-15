@@ -230,12 +230,24 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
   };
   const isStyleElement = (element) =>
     ['SPAN', 'B', 'STRONG', 'I', 'EM', 'U', 'FONT', 'SUB', 'SUP', 'A', 'SMALL', 'BIG', 'MARK'].includes(element.tagName);
-  const bodyStyle = window.getComputedStyle(pageElement);
-  const htmlStyle = window.getComputedStyle(document.documentElement);
-  const backgroundColor =
-    rgbToHex(bodyStyle.backgroundColor) ||
-    rgbToHex(htmlStyle.backgroundColor) ||
-    'FFFFFF';
+  const resolveBackgroundColor = () => {
+    const pageBg = rgbToHex(window.getComputedStyle(pageElement).backgroundColor);
+    if (pageBg) return pageBg;
+    const htmlBg = rgbToHex(window.getComputedStyle(document.documentElement).backgroundColor);
+    if (htmlBg) return htmlBg;
+    const pageArea = layoutWidthPx * layoutHeightPx;
+    const candidates = pageElement.querySelectorAll(':scope > div, :scope > section, :scope > main');
+    for (const el of candidates) {
+      const style = window.getComputedStyle(el);
+      const fill = rgbToHex(style.backgroundColor);
+      if (!fill) continue;
+      const rect = el.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area >= pageArea * 0.5) return fill;
+    }
+    return 'FFFFFF';
+  };
+  const backgroundColor = resolveBackgroundColor();
 
   const isVisible = (element, style, rect) => {
     if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
@@ -958,7 +970,8 @@ export const normalizeExtractedHtmlToPptxSlide = (
     texts,
     shapes,
     images,
-    tables: tables.length > 0 ? tables : undefined
+    tables: tables.length > 0 ? tables : undefined,
+    overlayImages: undefined
   }
 }
 // ========== Write ==========

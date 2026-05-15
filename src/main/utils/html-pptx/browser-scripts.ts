@@ -156,6 +156,28 @@ export const HIDE_TEXT_FOR_PPTX_BACKGROUND_SCRIPT = `
 // Hide text and non-animated shapes/images (which are extracted separately).
 export const HIDE_FOR_PPTX_BACKGROUND_SCRIPT = `
 (async () => {
+  // Helper: same rgbToHex as main extraction script
+  const rgbToHex = (value) => {
+    const source = String(value || '').trim();
+    if (!source || source === 'transparent') return '';
+    if (source.startsWith('#')) {
+      const raw = source.slice(1).toUpperCase();
+      return raw.length === 3 ? raw.split('').map((part) => part + part).join('') : raw;
+    }
+    const match = source.match(/rgba?\\(\\s*(\\d+(?:\\.\\d+)?)(?:\\s*,\\s*|\\s+)(\\d+(?:\\.\\d+)?)(?:\\s*,\\s*|\\s+)(\\d+(?:\\.\\d+)?)(?:\\s*(?:,|\\/)\\s*(\\d+(?:\\.\\d+)?%?))?/i);
+    if (!match) return '';
+    const alpha = match[4] === undefined
+      ? 1
+      : String(match[4]).endsWith('%')
+        ? Number.parseFloat(match[4]) / 100
+        : Number(match[4]);
+    if (alpha <= 0.02) return '';
+    return [match[1], match[2], match[3]]
+      .map((part) => Math.max(0, Math.min(255, Math.round(Number(part) || 0))).toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
+  };
+
   // 1. Mark additional decorative elements (blur blobs, glass-morphism, very low Tailwind opacity)
   const root = document.querySelector('.ppt-page-root') || document.body;
   root.querySelectorAll('*').forEach((el) => {
@@ -165,6 +187,19 @@ export const HIDE_FOR_PPTX_BACKGROUND_SCRIPT = `
     const cls = el.className && typeof el.className === 'string' ? el.className : '';
     const hasDecoClass = /\\b(opacity-[012]0|opacity-[12]5)\\b/.test(cls) || /\\bblur-(sm|md|lg|xl|2xl|3xl)\\b/.test(cls);
     if (hasBlur || hasDecoClass) {
+      el.setAttribute('data-pptx-animated', '1');
+    }
+  });
+
+  // 1b. Mark full-page background elements as decorative (preserve their background during capture)
+  const pageArea = root.getBoundingClientRect().width * root.getBoundingClientRect().height;
+  root.querySelectorAll(':scope > div, :scope > section, :scope > main').forEach((el) => {
+    if (el.hasAttribute('data-pptx-animated')) return;
+    const style = getComputedStyle(el);
+    const fill = rgbToHex(style.backgroundColor);
+    if (!fill) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width * rect.height >= pageArea * 0.5) {
       el.setAttribute('data-pptx-animated', '1');
     }
   });
@@ -184,11 +219,11 @@ export const HIDE_FOR_PPTX_BACKGROUND_SCRIPT = `
     'img:not([data-pptx-animated]):not([data-pptx-extracted-image]), canvas:not([data-pptx-animated]):not([data-pptx-extracted-image]) { opacity: 0 !important; visibility: hidden !important; }',
     // Make container backgrounds transparent (catch-all for non-extracted containers)
     'section:not([data-pptx-animated]), main:not([data-pptx-animated]), article:not([data-pptx-animated]), header:not([data-pptx-animated]), footer:not([data-pptx-animated]), aside:not([data-pptx-animated]), div:not([data-pptx-animated]), figure:not([data-pptx-animated]), figcaption:not([data-pptx-animated]), table:not([data-pptx-animated]), td:not([data-pptx-animated]), th:not([data-pptx-animated]) { background-color: transparent !important; border-color: transparent !important; }',
-    // Hide all text (extracted text + fallback for missed text)
-    'body :not(.katex):not(.katex *):not(canvas):not([data-pptx-animated]):not([data-pptx-extracted-image]) { color: transparent !important; -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; caret-color: transparent !important; }',
-    'body :not(.katex):not(.katex *)::before, body :not(.katex):not(.katex *)::after { color: transparent !important; -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; }',
-    // Preserve katex rendering
-    '.katex, .katex * { -webkit-text-fill-color: currentColor !important; text-shadow: none !important; }',
+    // Hide all text (extracted text + fallback for missed text, including .katex which is captured separately)
+    'body :not(canvas):not([data-pptx-animated]):not([data-pptx-extracted-image]) { color: transparent !important; -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; caret-color: transparent !important; }',
+    'body::before, body::after { color: transparent !important; -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; }',
+    // Hide katex elements (captured as separate images before background capture)
+    '.katex { opacity: 0 !important; visibility: hidden !important; }',
     // Hide SVG text (can't extract it anyway)
     'svg text, svg tspan { fill: transparent !important; stroke: transparent !important; }',
     // Hide input/textarea text
@@ -211,9 +246,9 @@ export const HIDE_ELEMENTS_FOR_PPTX_BACKGROUND_SCRIPT = `
     'img, canvas { opacity: 0 !important; visibility: hidden !important; }',
     'svg { opacity: 0 !important; visibility: hidden !important; }',
     'section, main, article, header, footer, aside, div, figure, figcaption, table, td, th { background-color: transparent !important; border-color: transparent !important; }',
-    'body :not(.katex):not(.katex *):not(canvas) { -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; caret-color: transparent !important; }',
-    'body :not(.katex):not(.katex *)::before, body :not(.katex):not(.katex *)::after { -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; }',
-    '.katex, .katex * { -webkit-text-fill-color: currentColor !important; text-shadow: none !important; }',
+    'body :not(canvas) { -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; caret-color: transparent !important; }',
+    'body::before, body::after { -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; }',
+    '.katex { opacity: 0 !important; visibility: hidden !important; }',
     'svg text, svg tspan { fill: transparent !important; stroke: transparent !important; }',
     'input, textarea { color: transparent !important; -webkit-text-fill-color: transparent !important; }'
   ].join('\\n');
@@ -221,6 +256,28 @@ export const HIDE_ELEMENTS_FOR_PPTX_BACKGROUND_SCRIPT = `
   void document.body.offsetHeight;
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   return true;
+})()
+`
+
+export const COLLECT_KATEX_RECTS_SCRIPT = `
+(async () => {
+  const root = document.querySelector('.ppt-page-root') || document.body;
+  const pageRect = root.getBoundingClientRect();
+  const katexElements = root.querySelectorAll('.katex');
+  const results = [];
+  for (const el of katexElements) {
+    // Only top-level .katex (skip nested inside another .katex)
+    if (el.parentElement?.closest('.katex')) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    results.push({
+      x: Math.round(rect.left - pageRect.left),
+      y: Math.round(rect.top - pageRect.top),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height)
+    });
+  }
+  return results;
 })()
 `
 

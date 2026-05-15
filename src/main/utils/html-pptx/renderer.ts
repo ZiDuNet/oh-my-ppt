@@ -11,7 +11,8 @@ import {
   FREEZE_PAGE_FOR_PPTX_SCRIPT,
   HIDE_FOR_PPTX_BACKGROUND_SCRIPT,
   RESET_SCALE_FOR_PPTX_CAPTURE_SCRIPT,
-  WAIT_FOR_PPTX_CAPTURE_FRAME_SCRIPT
+  WAIT_FOR_PPTX_CAPTURE_FRAME_SCRIPT,
+  COLLECT_KATEX_RECTS_SCRIPT
 } from './browser-scripts'
 
 export interface HtmlPageForPptx {
@@ -365,6 +366,32 @@ export const extractHtmlPageToPptxSlide = async ({
     // Reset page fit scale BEFORE background capture for full resolution,
     // but AFTER extraction (which used the scaled coordinates for correct positions).
     await win.webContents.executeJavaScript(RESET_SCALE_FOR_PPTX_CAPTURE_SCRIPT, true)
+
+    // Capture KaTeX formulas as individual images (they can't be extracted as text)
+    const katexRects: Array<{ x: number; y: number; w: number; h: number }> =
+      await win.webContents.executeJavaScript(COLLECT_KATEX_RECTS_SCRIPT, true)
+    for (const rect of katexRects) {
+      const pad = 4
+      const captureRect = {
+        x: Math.max(0, rect.x - pad),
+        y: Math.max(0, rect.y - pad),
+        width: rect.w + pad * 2,
+        height: rect.h + pad * 2
+      }
+      const img = await win.webContents.capturePage(captureRect)
+      const png = img.toPNG()
+      const dataUri = `data:image/png;base64,${png.toString('base64')}`
+      if (!slide.overlayImages) slide.overlayImages = []
+      slide.overlayImages.push({
+        dataUri,
+        mimeType: 'image/png',
+        x: (captureRect.x / PPTX_CAPTURE_WIDTH) * PPTX_SLIDE_WIDTH_IN,
+        y: (captureRect.y / PPTX_CAPTURE_HEIGHT) * PPTX_SLIDE_HEIGHT_IN,
+        w: (captureRect.width / PPTX_CAPTURE_WIDTH) * PPTX_SLIDE_WIDTH_IN,
+        h: (captureRect.height / PPTX_CAPTURE_HEIGHT) * PPTX_SLIDE_HEIGHT_IN,
+        alt: 'formula'
+      })
+    }
 
     // Background capture: keep decorative elements (blur blobs, glass-morphism) visible,
     // hide text and non-decorative shapes/images (which are extracted separately).

@@ -777,7 +777,7 @@ export function SessionDetailPage(): React.JSX.Element {
     detailState.setIsExportingPdf(true)
     toastInfo(t('sessionDetail.exportPdfStart'), {
       description: t('sessionDetail.exportPdfDescription'),
-      duration: 8000
+      duration: 4000
     })
     try {
       const result = await ipc.exportPdf(id)
@@ -809,7 +809,7 @@ export function SessionDetailPage(): React.JSX.Element {
     detailState.setIsExportingPng(true)
     toastInfo(t('sessionDetail.exportPngStart'), {
       description: t('sessionDetail.exportPngDescription'),
-      duration: 8000
+      duration: 4000
     })
     try {
       const result = await ipc.exportPng(id)
@@ -848,7 +848,7 @@ export function SessionDetailPage(): React.JSX.Element {
             ? 'sessionDetail.pptxPreparingImageDescription'
             : 'sessionDetail.pptxPreparingEditableDescription'
         ),
-        duration: 8000
+        duration: 4000
       }
     )
     try {
@@ -886,7 +886,7 @@ export function SessionDetailPage(): React.JSX.Element {
     detailState.setIsExportingSlidePack(true)
     toastInfo(t('sessionDetail.slidePackPreparing'), {
       description: t('sessionDetail.slidePackPreparingDescription'),
-      duration: 30000
+      duration: 4000
     })
     try {
       const result = await ipc.exportSlidePack(id)
