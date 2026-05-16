@@ -28,6 +28,11 @@ const TITLEBAR_SYMBOL_COLOR = '#5d6b4d'
 const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/arcsin1/oh-my-ppt/releases/latest'
 const GITHUB_RELEASES_URL = 'https://github.com/arcsin1/oh-my-ppt/releases'
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
+
 function resolveWindowBounds(): {
   width: number
   height: number
@@ -257,41 +262,55 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-app.whenReady().then(async () => {
-  configureLogging()
-  electronApp.setAppUserModelId('com.ohmyppt.app')
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
 
-  const dbPath = is.dev ? join(process.cwd(), 'ohmyppt.dev.db') : undefined
-  db = new PPTDatabase(dbPath)
-  await db.init()
-  setStyleDb(db)
-  log.info('[app] database initialized', {
-    env: is.dev ? 'dev' : 'prod',
-    dbPath: dbPath || 'userData/ohmyppt.db',
-  })
-  agentManager = new AgentManager(db)
-
-  const mainWindow = createWindow()
-
-  if (process.platform === 'win32') {
-    isTrayEnabled = createTray(mainWindow)
-  }
-
-  registerLocalAssetProtocol()
-
-  if (mainWindow && db && agentManager) {
-    setupIPC(mainWindow, db, agentManager)
-    scheduleUpdateNotification(mainWindow)
-  }
-
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+if (gotSingleInstanceLock) {
+  app.on('second-instance', () => {
+    log.info('[app] second instance requested; focusing existing window')
+    showMainWindow()
   })
 
-  app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  app.whenReady().then(async () => {
+    configureLogging()
+    electronApp.setAppUserModelId('com.ohmyppt.app')
+
+    const dbPath = is.dev ? join(process.cwd(), 'ohmyppt.dev.db') : undefined
+    db = new PPTDatabase(dbPath)
+    await db.init()
+    setStyleDb(db)
+    log.info('[app] database initialized', {
+      env: is.dev ? 'dev' : 'prod',
+      dbPath: dbPath || 'userData/ohmyppt.db',
+    })
+    agentManager = new AgentManager(db)
+
+    const window = createWindow()
+
+    if (process.platform === 'win32') {
+      isTrayEnabled = createTray(window)
+    }
+
+    registerLocalAssetProtocol()
+
+    if (window && db && agentManager) {
+      setupIPC(window, db, agentManager)
+      scheduleUpdateNotification(window)
+    }
+
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
+
+    app.on('activate', function () {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
   })
-})
+}
 
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin') return
