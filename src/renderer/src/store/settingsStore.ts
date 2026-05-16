@@ -352,14 +352,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
-  newapiFetchLogs: async (page = 0, pageSize = 20) => {
+  newapiFetchLogs: async () => {
     try {
-      const result = await ipc.newapiGetLogs({ page, pageSize })
-      if (result.success) {
-        const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 3600
-        const filtered = result.items.filter((item) => item.createdAt >= threeDaysAgo)
-        set({ newapiLogs: filtered, newapiLogsTotal: result.total, newapiLogsPage: page })
-      }
+      const pageSize = 50
+      const pages = [0, 1, 2, 3, 4]
+      const results = await Promise.all(
+        pages.map((p) => ipc.newapiGetLogs({ page: p, pageSize }))
+      )
+      const allItems = results.flatMap((r) => (r.success ? r.items : []))
+      const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 3600
+      const filtered = allItems.filter((item) => item.createdAt >= threeDaysAgo)
+      set({ newapiLogs: filtered, newapiLogsTotal: filtered.length, newapiLogsPage: 0 })
     } catch {
       // ignore
     }

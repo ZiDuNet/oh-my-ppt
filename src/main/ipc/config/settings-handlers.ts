@@ -534,7 +534,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     }
     try {
       const page = typeof payload?.page === 'number' ? payload.page : 0
-      const pageSize = Math.min(typeof payload?.pageSize === 'number' ? payload.pageSize : 20, 500)
+      const pageSize = typeof payload?.pageSize === 'number' ? payload.pageSize : 20
       const result = await newapi.getSelfLogs({ cookie, userId }, page, pageSize)
       return { success: true, items: result.items, total: result.total }
     } catch (error) {
