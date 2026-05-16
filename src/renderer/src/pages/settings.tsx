@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
@@ -12,27 +12,24 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs'
 import { useSettingsStore } from '../store'
 import { useToastStore } from '../store'
-import { CheckCircle2, FolderSearch, Pencil, Plus, ShieldCheck, Trash2, X } from 'lucide-react'
+import {
+  CheckCircle2,
+  FolderSearch,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  ShieldCheck,
+  Save
+} from 'lucide-react'
 import { useLang } from '../i18n'
-import type { ModelConfig } from '../lib/ipc'
 import {
   CONFIGURABLE_MODEL_TIMEOUT_PROFILES,
   type ConfigurableModelTimeoutProfile,
-  modelTimeoutMsToSeconds,
-  resolveModelTimeoutMs
+  modelTimeoutMsToSeconds
 } from '@shared/model-timeout.js'
+import type { ModelInfo } from '@renderer/lib/ipc'
 
-type ProviderId = 'anthropic' | 'openai'
-
-interface ModelForm {
-  id?: string
-  name: string
-  provider: ProviderId
-  model: string
-  apiKey: string
-  baseUrl: string
-  active: boolean
-}
+// ── helpers ──
 
 const createTimeoutSeconds = (
   timeouts?: Partial<Record<ConfigurableModelTimeoutProfile, number>>
@@ -44,198 +41,437 @@ const createTimeoutSeconds = (
     ])
   ) as Record<ConfigurableModelTimeoutProfile, number>
 
-const createEmptyModelForm = (active = false): ModelForm => ({
-  name: '',
-  provider: 'openai',
-  model: '',
-  apiKey: '',
-  baseUrl: '',
-  active
-})
+function formatQuota(quota: number, usedQuota: number): string {
+  const remaining = quota - usedQuota
+  const toUSD = (v: number) => (v / 500000).toFixed(2)
+  return `$${toUSD(remaining)} / $${toUSD(quota)}`
+}
 
-const createModelForm = (config: ModelConfig): ModelForm => ({
-  id: config.id,
-  name: config.name,
-  provider: config.provider,
-  model: config.model,
-  apiKey: config.apiKey,
-  baseUrl: config.baseUrl,
-  active: config.active
-})
+// ── memoized model option lists ──
 
-export function SettingsPage(): React.JSX.Element {
-  const {
-    modelConfigs,
-    fetchSettings,
-    saveSettings,
-    upsertModelConfig,
-    setActiveModelConfig,
-    deleteModelConfig,
-    setVerificationMessage,
-    verifyApiKey,
-    chooseStoragePath
-  } = useSettingsStore()
-  const { success, error, warning, info } = useToastStore()
-  const { lang, setLang, t } = useLang()
-  const [storagePath, setStoragePath] = useState(
-    () => useSettingsStore.getState().settings?.storagePath || ''
+const ModelSelectItems = memo(function ModelSelectItems({
+  models
+}: {
+  models: ModelInfo[]
+}) {
+  return (
+    <>
+      {models.map((model) => (
+        <SelectItem key={model.id} value={model.id}>
+          {model.id}
+        </SelectItem>
+      ))}
+    </>
   )
-  const [modelDialogOpen, setModelDialogOpen] = useState(false)
-  const [modelForm, setModelForm] = useState<ModelForm>(() => createEmptyModelForm())
-  const [timeoutSeconds, setTimeoutSeconds] = useState<
-    Record<ConfigurableModelTimeoutProfile, number>
-  >(() => createTimeoutSeconds(useSettingsStore.getState().settings?.timeouts))
-  const [savingModel, setSavingModel] = useState(false)
-  const [savingTimeouts, setSavingTimeouts] = useState(false)
+})
+
+// ── Login form ──
+
+const LoginForm = memo(function LoginForm() {
+  const newapiLoading = useSettingsStore((s) => s.newapiLoading)
+  const newapiLogin = useSettingsStore((s) => s.newapiLogin)
+  const { success, error, warning } = useToastStore()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const handleLogin = useCallback(async () => {
+    if (!username.trim()) {
+      warning('请输入用户名。')
+      return
+    }
+    if (!password.trim()) {
+      warning('请输入密码。')
+      return
+    }
+    const ok = await newapiLogin(username.trim(), password.trim())
+    if (ok) {
+      success('登录成功')
+      setUsername('')
+      setPassword('')
+    } else {
+      const msg = useSettingsStore.getState().verificationMessage
+      error('登录失败', { description: msg || '请检查用户名和密码。' })
+    }
+  }, [username, password, newapiLogin, success, error, warning])
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && !newapiLoading) void handleLogin()
+    },
+    [handleLogin, newapiLoading]
+  )
+
+  return (
+    <div className="flex gap-4">
+      <div className="hidden w-48 shrink-0 flex-col items-center justify-center rounded-lg bg-gradient-to-br from-[#eef6e8] to-[#d4e8c8] p-6 sm:flex">
+        <div className="text-4xl">&#x1F680;</div>
+        <p className="mt-3 text-center text-sm font-medium text-[#3e4a32]">
+          AI 驱动的
+          <br />
+          PPT 生成
+        </p>
+        <p className="mt-1 text-center text-[11px] text-[#5d7b4d]">登录后即可使用</p>
+      </div>
+
+      <Card className="flex-1">
+        <CardHeader className="p-5 pb-3">
+          <CardTitle className="text-base">账号登录</CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            登录潮汐平台，使用 AI 模型生成 PPT
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4 p-5 pt-0">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">用户名</label>
+            <Input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="请输入用户名"
+              className="h-10"
+              onKeyDown={onKeyDown}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">密码</label>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="请输入密码"
+              className="h-10"
+              onKeyDown={onKeyDown}
+            />
+          </div>
+          <Button
+            className="w-full"
+            disabled={newapiLoading}
+            onClick={() => void handleLogin()}
+          >
+            <LogIn className="mr-1.5 h-4 w-4" />
+            {newapiLoading ? '登录中...' : '登录'}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            还没有账号？{' '}
+            <a
+              href="https://new-api.chaoxi.live/register"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#5d7b4d] underline hover:text-[#3e5a32]"
+            >
+              前往注册
+            </a>
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  )
+})
+
+// ── Logged-in panel ──
+
+const LoggedInPanel = memo(function LoggedInPanel({
+  models,
+  activeModel,
+  visionModelId,
+  t
+}: {
+  models: ModelInfo[]
+  activeModel: string
+  visionModelId: string
+  t: (key: string) => string
+}) {
+  const newapiUser = useSettingsStore((s) => s.newapiUser)
+  const newapiLoading = useSettingsStore((s) => s.newapiLoading)
+  const newapiLogout = useSettingsStore((s) => s.newapiLogout)
+  const newapiSetModel = useSettingsStore((s) => s.newapiSetModel)
+  const newapiRefreshUser = useSettingsStore((s) => s.newapiRefreshUser)
+  const setVerificationMessage = useSettingsStore((s) => s.setVerificationMessage)
+  const verifyApiKey = useSettingsStore((s) => s.verifyApiKey)
+  const modelConfigs = useSettingsStore((s) => s.modelConfigs)
+  const { success, error, warning } = useToastStore()
+
+  const [pendingModel, setPendingModel] = useState(activeModel)
   const [verifying, setVerifying] = useState(false)
-  const [activatingId, setActivatingId] = useState<string | null>(null)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [visionModelId, setVisionModelId] = useState(
-    () => useSettingsStore.getState().settings?.visionModelId || ''
-  )
-  const [stylesCloudUrl, setStylesCloudUrl] = useState(
-    () => useSettingsStore.getState().settings?.stylesCloudUrl || ''
-  )
+  const [savingModel, setSavingModel] = useState(false)
+  const [localVisionId, setLocalVisionId] = useState(visionModelId)
+
+  // sync from parent
+  useEffect(() => {
+    setPendingModel(activeModel)
+  }, [activeModel])
 
   useEffect(() => {
-    let active = true
-    const loadSettings = async (): Promise<void> => {
-      await fetchSettings()
-      if (!active) return
-      const nextSettings = useSettingsStore.getState().settings
-      setStoragePath(nextSettings?.storagePath || '')
-      setTimeoutSeconds(createTimeoutSeconds(nextSettings?.timeouts))
-      setVisionModelId(nextSettings?.visionModelId || '')
-      setStylesCloudUrl(nextSettings?.stylesCloudUrl || '')
-    }
-    void loadSettings()
-    return () => {
-      active = false
-    }
-  }, [fetchSettings])
+    setLocalVisionId(visionModelId)
+  }, [visionModelId])
 
-  useEffect(() => {
-    if (!modelDialogOpen) return
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !savingModel) {
-        setModelDialogOpen(false)
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [modelDialogOpen, savingModel])
+  const handleLogout = useCallback(async () => {
+    if (!window.confirm('确定退出登录？')) return
+    await newapiLogout()
+    success('已退出登录')
+  }, [newapiLogout, success])
 
-  const activeModelConfig = modelConfigs.find((config) => config.active)
-  const timeoutFields: Array<{
-    profile: ConfigurableModelTimeoutProfile
-    label: string
-    hint: string
-    min: number
-  }> = useMemo(
-    () => [
-      {
-        profile: 'planning',
-        label: t('settings.timeoutPlanning'),
-        hint: t('settings.timeoutPlanningHint'),
-        min: 120
-      },
-      {
-        profile: 'design',
-        label: t('settings.timeoutDesign'),
-        hint: t('settings.timeoutDesignHint'),
-        min: 120
-      },
-      {
-        profile: 'agent',
-        label: t('settings.timeoutAgent'),
-        hint: t('settings.timeoutAgentHint'),
-        min: 300
-      },
-      {
-        profile: 'document',
-        label: t('settings.timeoutDocument'),
-        hint: t('settings.timeoutDocumentHint'),
-        min: 300
-      }
-    ],
-    [t]
-  )
+  const handleRefreshUser = useCallback(async () => {
+    await newapiRefreshUser()
+  }, [newapiRefreshUser])
 
-  const openCreateModelDialog = (): void => {
-    setModelForm(createEmptyModelForm(modelConfigs.length === 0))
-    setVerificationMessage(null)
-    setModelDialogOpen(true)
-  }
-
-  const openEditModelDialog = (config: ModelConfig): void => {
-    setModelForm(createModelForm(config))
-    setVerificationMessage(null)
-    setModelDialogOpen(true)
-  }
-
-  const updateModelForm = (patch: Partial<ModelForm>): void => {
-    setModelForm((form) => ({ ...form, ...patch }))
-    setVerificationMessage(null)
-  }
-
-  const handleSaveModel = async (): Promise<void> => {
-    if (!modelForm.name.trim()) {
-      warning(t('settings.fillModelName'))
+  const handleVerify = useCallback(async () => {
+    if (!pendingModel) {
+      warning('请先选择模型。')
       return
     }
-    if (!modelForm.model.trim()) {
-      warning(t('settings.fillModel'))
-      return
-    }
-    if (!modelForm.apiKey.trim()) {
-      warning(t('settings.fillApiKey'))
-      return
-    }
-
-    setSavingModel(true)
+    setVerifying(true)
     setVerificationMessage(null)
     try {
-      const id = await upsertModelConfig({
-        id: modelForm.id,
-        name: modelForm.name.trim(),
-        provider: modelForm.provider,
-        model: modelForm.model.trim(),
-        apiKey: modelForm.apiKey.trim(),
-        baseUrl: modelForm.baseUrl.trim(),
-        active: modelForm.active
-      })
+      const config = modelConfigs.find((c) => c.active)
+      if (!config) return
+      const valid = await verifyApiKey(
+        config.provider,
+        config.apiKey,
+        pendingModel,
+        config.baseUrl,
+        30000
+      )
+      const msg = useSettingsStore.getState().verificationMessage
+      if (valid) {
+        success('连接验证成功', { description: msg || '模型连接正常。' })
+      } else {
+        error('连接验证失败', { description: msg || '请检查模型配置。' })
+      }
+    } finally {
+      setVerifying(false)
+    }
+  }, [pendingModel, modelConfigs, verifyApiKey, setVerificationMessage, success, error, warning])
+
+  const handleSave = useCallback(async () => {
+    if (!pendingModel) {
+      warning('请先选择模型。')
+      return
+    }
+    setSavingModel(true)
+    try {
+      await newapiSetModel(pendingModel)
       const saveError = useSettingsStore.getState().verificationMessage
-      if (!id || saveError) {
-        error(t('settings.saveFailed'), { description: saveError || t('common.retryLater') })
+      if (saveError) {
+        error('保存失败', { description: saveError })
         return
       }
-      setModelDialogOpen(false)
-      success(t('settings.modelSaved'), { description: t('settings.modelSavedDescription') })
+      success('模型已保存')
     } finally {
       setSavingModel(false)
     }
-  }
+  }, [pendingModel, newapiSetModel, success, error, warning])
 
-  const handleTimeoutChange = (profile: ConfigurableModelTimeoutProfile, value: string): void => {
-    setTimeoutSeconds((current) => ({
-      ...current,
-      [profile]: modelTimeoutMsToSeconds(Number(value) * 1000, profile)
-    }))
-    setVerificationMessage(null)
-  }
+  const handleVisionChange = useCallback(
+    async (id: string) => {
+      const value = id === '__default__' ? '' : id
+      setLocalVisionId(value)
+      setVerificationMessage(null)
+      try {
+        const { saveSettings } = useSettingsStore.getState()
+        await saveSettings({ visionModelId: value })
+        const saveError = useSettingsStore.getState().verificationMessage
+        if (saveError) {
+          error(t('settings.saveFailed'), { description: saveError })
+          return
+        }
+        success(t('settings.saved'))
+      } catch {
+        error(t('settings.saveFailed'))
+      }
+    },
+    [setVerificationMessage, success, error, t]
+  )
 
-  const handleSaveTimeouts = async (): Promise<void> => {
+  const modelChanged = pendingModel !== activeModel
+
+  const modelOptions = useMemo(() => models, [models])
+
+  return (
+    <>
+      <Card className="mb-4">
+        <CardHeader className="flex-row items-center justify-between p-5 pb-3">
+          <CardTitle className="text-base">账号信息</CardTitle>
+          <Button size="sm" variant="ghost" onClick={() => void handleRefreshUser()}>
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3 p-5 pt-0">
+          {newapiUser && (
+            <div className="rounded-lg border border-[#96b77f]/80 bg-[#eef6e8] p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-[#5d7b4d]" />
+                    <span className="font-medium text-[#33402a]">
+                      {newapiUser.displayName || newapiUser.username}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">@{newapiUser.username}</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={newapiLoading}
+                  onClick={() => void handleLogout()}
+                >
+                  <LogOut className="mr-1.5 h-4 w-4" />
+                  退出登录
+                </Button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 rounded-md bg-white/60 p-2.5 text-xs">
+                <div>
+                  <span className="text-muted-foreground">剩余额度</span>
+                  <p className="mt-0.5 font-semibold text-[#3e4a32]">
+                    {formatQuota(newapiUser.quota, newapiUser.usedQuota)}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">账号状态</span>
+                  <p className="mt-0.5 font-semibold text-[#3e4a32]">
+                    {newapiUser.status === 1 ? (
+                      <span className="text-[#5d7b4d]">正常</span>
+                    ) : (
+                      <span className="text-red-600">异常</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-4">
+        <CardHeader className="p-5 pb-3">
+          <CardTitle className="text-base">模型选择</CardTitle>
+          {activeModel && (
+            <p className="mt-1 text-xs text-muted-foreground">当前模型：{activeModel}</p>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3 p-5 pt-0">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">选择模型</label>
+            <Select value={pendingModel} onValueChange={setPendingModel}>
+              <SelectTrigger className="h-10">
+                <SelectValue placeholder="选择可用模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <ModelSelectItems models={modelOptions} />
+              </SelectContent>
+            </Select>
+            <p className="mt-2 text-xs text-muted-foreground">
+              模型列表来自平台，不同账号可用的模型可能不同。
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">{t('settings.visionModel')}</label>
+            <Select
+              value={localVisionId || '__default__'}
+              onValueChange={(v) => void handleVisionChange(v)}
+            >
+              <SelectTrigger className="h-10">
+                <SelectValue placeholder={t('settings.visionModelFollowDefault')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">
+                  {t('settings.visionModelFollowDefault')}
+                </SelectItem>
+                <ModelSelectItems models={modelOptions} />
+              </SelectContent>
+            </Select>
+            <p className="mt-2 text-xs text-muted-foreground">{t('settings.visionModelHint')}</p>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="secondary"
+              disabled={verifying || !pendingModel}
+              onClick={() => void handleVerify()}
+              className="rounded-lg border border-[#7ea06f]/45"
+            >
+              <ShieldCheck className="mr-1.5 h-4 w-4" />
+              {verifying ? '验证中...' : '验证连接'}
+            </Button>
+            <Button disabled={savingModel || !modelChanged} onClick={() => void handleSave()}>
+              <Save className="mr-1.5 h-4 w-4" />
+              {savingModel ? '保存中...' : '保存'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </>
+  )
+})
+
+// ── Main page ──
+
+export function SettingsPage(): React.JSX.Element {
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings)
+  const saveSettings = useSettingsStore((s) => s.saveSettings)
+  const setVerificationMessage = useSettingsStore((s) => s.setVerificationMessage)
+  const chooseStoragePath = useSettingsStore((s) => s.chooseStoragePath)
+  const newapiFetchStatus = useSettingsStore((s) => s.newapiFetchStatus)
+  const newapiLoggedIn = useSettingsStore((s) => s.newapiLoggedIn)
+  const newapiModels = useSettingsStore((s) => s.newapiModels)
+  const modelConfigs = useSettingsStore((s) => s.modelConfigs)
+  const settings = useSettingsStore((s) => s.settings)
+  const { success, error, info } = useToastStore()
+  const { lang, setLang, t } = useLang()
+
+  const [storagePath, setStoragePath] = useState(() => settings?.storagePath || '')
+  const [timeoutSeconds, setTimeoutSeconds] = useState<
+    Record<ConfigurableModelTimeoutProfile, number>
+  >(() => createTimeoutSeconds(settings?.timeouts))
+  const [savingTimeouts, setSavingTimeouts] = useState(false)
+  const [stylesCloudUrl, setStylesCloudUrl] = useState(() => settings?.stylesCloudUrl || '')
+
+  const activeModel = modelConfigs.find((c) => c.active)?.model || ''
+  const visionModelId = settings?.visionModelId || ''
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      await Promise.all([fetchSettings(), newapiFetchStatus()])
+      if (!active) return
+      const s = useSettingsStore.getState().settings
+      setStoragePath(s?.storagePath || '')
+      setTimeoutSeconds(createTimeoutSeconds(s?.timeouts))
+      setStylesCloudUrl(s?.stylesCloudUrl || '')
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [fetchSettings, newapiFetchStatus])
+
+  const timeoutFields = useMemo(
+    () =>
+      [
+        { profile: 'planning', label: t('settings.timeoutPlanning'), hint: t('settings.timeoutPlanningHint'), min: 120 },
+        { profile: 'design', label: t('settings.timeoutDesign'), hint: t('settings.timeoutDesignHint'), min: 120 },
+        { profile: 'agent', label: t('settings.timeoutAgent'), hint: t('settings.timeoutAgentHint'), min: 300 },
+        { profile: 'document', label: t('settings.timeoutDocument'), hint: t('settings.timeoutDocumentHint'), min: 300 }
+      ] as const,
+    [t]
+  )
+
+  const handleTimeoutChange = useCallback(
+    (profile: ConfigurableModelTimeoutProfile, value: string) => {
+      setTimeoutSeconds((current) => ({
+        ...current,
+        [profile]: modelTimeoutMsToSeconds(Number(value) * 1000, profile)
+      }))
+      setVerificationMessage(null)
+    },
+    [setVerificationMessage]
+  )
+
+  const handleSaveTimeouts = useCallback(async () => {
     setSavingTimeouts(true)
     setVerificationMessage(null)
     try {
       await saveSettings({
         timeouts: Object.fromEntries(
-          CONFIGURABLE_MODEL_TIMEOUT_PROFILES.map((profile) => [
-            profile,
-            timeoutSeconds[profile] * 1000
-          ])
+          CONFIGURABLE_MODEL_TIMEOUT_PROFILES.map((profile) => [profile, timeoutSeconds[profile] * 1000])
         ) as Record<ConfigurableModelTimeoutProfile, number>
       })
       const saveError = useSettingsStore.getState().verificationMessage
@@ -247,109 +483,9 @@ export function SettingsPage(): React.JSX.Element {
     } finally {
       setSavingTimeouts(false)
     }
-  }
+  }, [timeoutSeconds, saveSettings, setVerificationMessage, success, error, t])
 
-  const handleVerify = async (): Promise<void> => {
-    if (!modelForm.apiKey.trim()) {
-      warning(t('settings.fillApiKey'))
-      return
-    }
-    if (!modelForm.model.trim()) {
-      warning(t('settings.fillModel'))
-      return
-    }
-
-    setVerifying(true)
-    setVerificationMessage(null)
-    try {
-      const valid = await verifyApiKey(
-        modelForm.provider,
-        modelForm.apiKey,
-        modelForm.model,
-        modelForm.baseUrl,
-        resolveModelTimeoutMs(undefined, 'verify')
-      )
-      const verifyMessage = useSettingsStore.getState().verificationMessage
-      if (valid) {
-        success(t('settings.verifyPassed'), {
-          description: verifyMessage || t('settings.verifyPassedDescription')
-        })
-      } else {
-        error(t('settings.verifyFailed'), {
-          description: verifyMessage || t('settings.verifyFailedDescription')
-        })
-      }
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  const handleActivateModel = async (id: string): Promise<void> => {
-    setActivatingId(id)
-    setVerificationMessage(null)
-    try {
-      await setActiveModelConfig(id)
-      const activateError = useSettingsStore.getState().verificationMessage
-      if (activateError) {
-        error(t('settings.activateModelFailed'), { description: activateError })
-        return
-      }
-      success(t('settings.activeModelUpdated'))
-    } finally {
-      setActivatingId(null)
-    }
-  }
-
-  const handleDeleteModel = async (config: ModelConfig): Promise<void> => {
-    if (!window.confirm(t('settings.deleteModelConfirm', { name: config.name }))) return
-    setDeletingId(config.id)
-    setVerificationMessage(null)
-    try {
-      await deleteModelConfig(config.id)
-      const deleteError = useSettingsStore.getState().verificationMessage
-      if (deleteError) {
-        error(t('settings.deleteModelFailed'), { description: deleteError })
-        return
-      }
-      info(t('settings.modelDeleted'))
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
-  const handleVisionModelChange = async (id: string): Promise<void> => {
-    const value = id === '__default__' ? '' : id
-    setVisionModelId(value)
-    setVerificationMessage(null)
-    try {
-      await saveSettings({ visionModelId: value })
-      const saveError = useSettingsStore.getState().verificationMessage
-      if (saveError) {
-        error(t('settings.saveFailed'), { description: saveError })
-        return
-      }
-      success(t('settings.saved'))
-    } catch {
-      error(t('settings.saveFailed'))
-    }
-  }
-
-  const handleStylesCloudUrlSave = async (): Promise<void> => {
-    setVerificationMessage(null)
-    try {
-      await saveSettings({ stylesCloudUrl })
-      const saveError = useSettingsStore.getState().verificationMessage
-      if (saveError) {
-        error(t('settings.saveFailed'), { description: saveError })
-        return
-      }
-      success(t('settings.saved'))
-    } catch {
-      error(t('settings.saveFailed'))
-    }
-  }
-
-  const handleChoosePath = async (): Promise<void> => {
+  const handleChoosePath = useCallback(async () => {
     const path = await chooseStoragePath()
     const pathError = useSettingsStore.getState().storagePathError
     if (pathError) {
@@ -367,7 +503,22 @@ export function SettingsPage(): React.JSX.Element {
       setStoragePath(path)
       info(t('settings.storagePathUpdated'), { description: path })
     }
-  }
+  }, [chooseStoragePath, saveSettings, setVerificationMessage, error, info, t])
+
+  const handleStylesCloudUrlSave = useCallback(async () => {
+    setVerificationMessage(null)
+    try {
+      await saveSettings({ stylesCloudUrl })
+      const saveError = useSettingsStore.getState().verificationMessage
+      if (saveError) {
+        error(t('settings.saveFailed'), { description: saveError })
+        return
+      }
+      success(t('settings.saved'))
+    } catch {
+      error(t('settings.saveFailed'))
+    }
+  }, [stylesCloudUrl, saveSettings, setVerificationMessage, success, error, t])
 
   return (
     <div className="mx-auto max-w-4xl p-6">
@@ -426,7 +577,7 @@ export function SettingsPage(): React.JSX.Element {
                   />
                   <Button
                     variant="secondary"
-                    onClick={handleChoosePath}
+                    onClick={() => void handleChoosePath()}
                     className="h-10 min-w-[96px] shrink-0 rounded-lg border border-[#7ea06f]/45 px-4"
                   >
                     <FolderSearch className="mr-1.5 h-4 w-4" />
@@ -440,105 +591,16 @@ export function SettingsPage(): React.JSX.Element {
         </TabsContent>
 
         <TabsContent value="model">
-          <Card className="mb-4">
-            <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-              <div>
-                <CardTitle className="text-base">{t('settings.modelAccess')}</CardTitle>
-                {activeModelConfig && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('settings.currentActiveModel', { name: activeModelConfig.name })}
-                  </p>
-                )}
-              </div>
-              <Button size="sm" onClick={openCreateModelDialog}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                {t('settings.addModel')}
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-2.5 p-5 pt-0">
-              {modelConfigs.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[#d8ccb5]/85 bg-[#fff9ef]/70 p-6 text-sm text-muted-foreground">
-                  {t('settings.noModels')}
-                </div>
-              ) : (
-                modelConfigs.map((config) => (
-                  <div
-                    key={config.id}
-                    className={
-                      config.active
-                        ? 'flex flex-col gap-3 rounded-lg border border-[#96b77f]/80 bg-[#eef6e8] p-3 shadow-[inset_3px_0_0_#6f8f64] sm:flex-row sm:items-center sm:justify-between'
-                        : 'flex flex-col gap-3 rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3 sm:flex-row sm:items-center sm:justify-between'
-                    }
-                  >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {config.active && <CheckCircle2 className="h-4 w-4 text-[#5d7b4d]" />}
-                        <p className="font-medium text-[#33402a]">{config.name}</p>
-                        <span className="rounded-full bg-[#e9efde] px-2 py-0.5 text-[11px] uppercase text-[#506141]">
-                          {config.provider}
-                        </span>
-                      </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">{config.model}</p>
-                      {config.baseUrl && (
-                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {config.baseUrl}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant={config.active ? 'secondary' : 'outline'}
-                        disabled={config.active || activatingId === config.id}
-                        onClick={() => void handleActivateModel(config.id)}
-                      >
-                        {config.active ? t('settings.activeModel') : t('settings.activateModel')}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEditModelDialog(config)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={deletingId === config.id}
-                        onClick={() => void handleDeleteModel(config)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="p-5 pb-3">
-              <CardTitle className="text-base">{t('settings.visionModel')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 p-5 pt-0">
-              <div>
-                <Select
-                  value={visionModelId || '__default__'}
-                  onValueChange={(v) => void handleVisionModelChange(v)}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder={t('settings.visionModelFollowDefault')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">{t('settings.visionModelFollowDefault')}</SelectItem>
-                    {modelConfigs.map((config) => (
-                      <SelectItem key={config.id} value={config.id}>
-                        {config.name}
-                        <span className="ml-2 text-xs text-muted-foreground">({config.provider})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-xs text-muted-foreground">{t('settings.visionModelHint')}</p>
-              </div>
-            </CardContent>
-          </Card>
+          {!newapiLoggedIn ? (
+            <LoginForm />
+          ) : (
+            <LoggedInPanel
+              models={newapiModels}
+              activeModel={activeModel}
+              visionModelId={visionModelId}
+              t={t}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="advanced">
@@ -596,135 +658,12 @@ export function SettingsPage(): React.JSX.Element {
           </Card>
 
           <div className="flex justify-end">
-            <Button onClick={handleSaveTimeouts} disabled={savingTimeouts}>
+            <Button onClick={() => void handleSaveTimeouts()} disabled={savingTimeouts}>
               {savingTimeouts ? t('common.saving') : t('settings.saveTimeouts')}
             </Button>
           </div>
         </TabsContent>
       </Tabs>
-
-      {modelDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[#2d291f]/42 p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !savingModel) {
-              setModelDialogOpen(false)
-            }
-          }}
-        >
-          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-[#d8ccb5]/85 bg-[#fffaf1] shadow-[0_24px_70px_rgba(53,44,32,0.28)]">
-            <div className="flex items-center justify-between border-b border-[#e3d8c5] px-5 py-4">
-              <h2 className="text-base font-semibold text-[#33402a]">
-                {modelForm.id ? t('settings.editModel') : t('settings.addModel')}
-              </h2>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setModelDialogOpen(false)}
-                disabled={savingModel}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {t('settings.modelName')}
-                  </label>
-                  <Input
-                    value={modelForm.name}
-                    onChange={(e) => updateModelForm({ name: e.target.value })}
-                    placeholder={t('settings.modelNamePlaceholder')}
-                    className="h-10"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {t('settings.providerPreset')}
-                  </label>
-                  <Select
-                    value={modelForm.provider}
-                    onValueChange={(value) =>
-                      updateModelForm({ provider: value === 'anthropic' ? 'anthropic' : 'openai' })
-                    }
-                  >
-                    <SelectTrigger className="h-10">
-                      <SelectValue placeholder={t('settings.providerPlaceholder')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
-                      <SelectItem value="openai">OpenAI</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">model</label>
-                <Input
-                  placeholder={t('settings.modelPlaceholder')}
-                  value={modelForm.model}
-                  onChange={(e) => updateModelForm({ model: e.target.value })}
-                  className="h-10"
-                />
-                <p className="mt-2 text-xs text-muted-foreground">{t('settings.modelHint')}</p>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">base_url</label>
-                <Input
-                  placeholder={t('settings.baseUrlPlaceholder')}
-                  value={modelForm.baseUrl}
-                  onChange={(e) => updateModelForm({ baseUrl: e.target.value })}
-                  className="h-10"
-                />
-                <p className="mt-2 text-xs text-muted-foreground">{t('settings.baseUrlHint')}</p>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium">api_key</label>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder={t('settings.apiKeyPlaceholder', {
-                      provider: modelForm.provider === 'openai' ? 'OpenAI' : 'Claude'
-                    })}
-                    value={modelForm.apiKey}
-                    onChange={(e) => updateModelForm({ apiKey: e.target.value })}
-                    className="h-10 min-w-0 flex-1"
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={handleVerify}
-                    disabled={verifying}
-                    className="h-10 min-w-[96px] shrink-0 rounded-lg border border-[#7ea06f]/45 px-4"
-                  >
-                    <ShieldCheck className="mr-1.5 h-4 w-4" />
-                    {verifying ? t('settings.verifying') : t('settings.verify')}
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">{t('settings.verifyHint')}</p>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 border-t border-[#e3d8c5] px-5 py-4">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setModelDialogOpen(false)}
-                disabled={savingModel}
-              >
-                {t('common.cancel')}
-              </Button>
-              <Button onClick={handleSaveModel} disabled={savingModel}>
-                {savingModel ? t('common.saving') : t('settings.saveModel')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

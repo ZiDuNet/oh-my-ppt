@@ -152,6 +152,20 @@ export interface CreateSessionPayload {
   referenceDocumentPath?: string
 }
 
+export interface NewApiUserInfo {
+  id: number
+  username: string
+  displayName: string
+  quota: number
+  usedQuota: number
+  status: number
+}
+
+export interface ModelInfo {
+  id: string
+  ownedBy: string
+}
+
 export interface ModelConfig {
   id: string
   name: string
@@ -480,5 +494,39 @@ export const ipc = {
       version: string
     }>,
   openPresentation: (payload: { sessionId: string; startIndex?: number }) =>
-    getIpc().invoke('presentation:open', payload) as Promise<{ success: boolean }>
+    getIpc().invoke('presentation:open', payload) as Promise<{ success: boolean }>,
+
+  // ---------- NewAPI ----------
+  newapiLogin: (payload: { username: string; password: string }) =>
+    getIpc().invoke('newapi:login', payload) as Promise<{
+      success: boolean
+      userInfo?: NewApiUserInfo
+      models?: ModelInfo[]
+      message?: string
+    }>,
+  newapiRegister: (payload: { username: string; password: string; email?: string }) =>
+    getIpc().invoke('newapi:register', payload) as Promise<{
+      success: boolean
+      message?: string
+    }>,
+  newapiGetStatus: () =>
+    getIpc().invoke('newapi:getStatus') as Promise<{
+      loggedIn: boolean
+      userInfo?: NewApiUserInfo
+    }>,
+  newapiGetModels: () =>
+    getIpc().invoke('newapi:getModels') as Promise<{
+      success: boolean
+      models?: ModelInfo[]
+      message?: string
+    }>,
+  newapiSetModel: (payload: { model: string }) =>
+    getIpc().invoke('newapi:setModel', payload) as Promise<{ success: boolean }>,
+  newapiLogout: () =>
+    getIpc().invoke('newapi:logout') as Promise<{ success: boolean }>,
+  newapiRefreshUser: () =>
+    getIpc().invoke('newapi:refreshUser') as Promise<{
+      success: boolean
+      userInfo?: NewApiUserInfo
+    }>
 }

@@ -89,6 +89,7 @@ export async function resolveVisionModelConfig(
   const settings = await ctx.db.getAllSettings()
   const visionModelId = typeof settings.vision_model_id === 'string' ? settings.vision_model_id.trim() : ''
   if (visionModelId) {
+    // 先尝试按 model_config id 查找（旧逻辑兼容）
     const config = await ctx.db.getModelConfigById(visionModelId)
     if (config) {
       const provider = String(config.provider || '').trim()
@@ -105,8 +106,25 @@ export async function resolveVisionModelConfig(
           baseUrl: String(config.baseUrl || '').trim()
         }
       }
-      log.warn('[vision-model] vision model config incomplete, falling back to active model', { id: visionModelId })
     }
+
+    // 按 model name 查找：复用 active model 的 apiKey/baseUrl，替换 model
+    const activeConfig = await ctx.db.getActiveModelConfig()
+    if (activeConfig) {
+      const apiKey = ctx.decryptApiKey(activeConfig.apiKey).trim()
+      if (apiKey) {
+        log.info('[vision-model] using model name override', { model: visionModelId })
+        return {
+          id: activeConfig.id,
+          name: activeConfig.name,
+          provider: String(activeConfig.provider || '').trim(),
+          model: visionModelId,
+          apiKey,
+          baseUrl: String(activeConfig.baseUrl || '').trim()
+        }
+      }
+    }
+    log.warn('[vision-model] vision model config incomplete, falling back to active model')
   }
   log.info('[vision-model] no dedicated vision model, falling back to active model')
   return resolveActiveModelConfig(ctx)

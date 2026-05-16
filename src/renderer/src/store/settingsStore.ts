@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { ipc, type ModelConfig } from '@renderer/lib/ipc'
+import { ipc, type ModelConfig, type ModelInfo, type NewApiUserInfo } from '@renderer/lib/ipc'
 import type { ConfigurableModelTimeoutProfile } from '@shared/model-timeout.js'
 
 interface Settings {
@@ -17,6 +17,12 @@ interface SettingsStore {
   verificationMessage: string | null
   storagePathError: string | null
   loading: boolean
+
+  // NewAPI auth
+  newapiUser: NewApiUserInfo | null
+  newapiLoggedIn: boolean
+  newapiModels: ModelInfo[]
+  newapiLoading: boolean
 
   fetchSettings: () => Promise<void>
   saveSettings: (settings: Partial<Settings>) => Promise<void>
@@ -40,6 +46,14 @@ interface SettingsStore {
     timeoutMs: number
   ) => Promise<boolean>
   chooseStoragePath: () => Promise<string | null>
+
+  // NewAPI methods
+  newapiLogin: (username: string, password: string) => Promise<boolean>
+  newapiLogout: () => Promise<void>
+  newapiFetchStatus: () => Promise<void>
+  newapiFetchModels: () => Promise<void>
+  newapiSetModel: (model: string) => Promise<void>
+  newapiRefreshUser: () => Promise<void>
 }
 
 const readStoredLocale = (): 'zh' | 'en' => {
@@ -55,6 +69,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   verificationMessage: null,
   storagePathError: null,
   loading: false,
+
+  newapiUser: null,
+  newapiLoggedIn: false,
+  newapiModels: [],
+  newapiLoading: false,
 
   fetchSettings: async () => {
     try {
@@ -180,6 +199,104 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           : fallbackMessage('选择文件夹失败。', 'Failed to choose folder.')
       set({ storagePathError: message })
       return null
+    }
+  },
+
+  // ---------- NewAPI ----------
+
+  newapiLogin: async (username, password) => {
+    set({ newapiLoading: true, verificationMessage: null })
+    try {
+      const result = await ipc.newapiLogin({ username, password })
+      if (result.success && result.userInfo) {
+        set({
+          newapiUser: result.userInfo,
+          newapiLoggedIn: true,
+          newapiModels: result.models || []
+        })
+        await get().fetchSettings()
+        return true
+      }
+      set({ verificationMessage: result.message || '登录失败。' })
+      return false
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '登录失败。'
+      set({ verificationMessage: message })
+      return false
+    } finally {
+      set({ newapiLoading: false })
+    }
+  },
+
+  newapiLogout: async () => {
+    set({ newapiLoading: true, verificationMessage: null })
+    try {
+      await ipc.newapiLogout()
+      set({
+        newapiUser: null,
+        newapiLoggedIn: false,
+        newapiModels: []
+      })
+      await get().fetchSettings()
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '退出登录失败。'
+      set({ verificationMessage: message })
+    } finally {
+      set({ newapiLoading: false })
+    }
+  },
+
+  newapiFetchStatus: async () => {
+    try {
+      const result = await ipc.newapiGetStatus()
+      set({
+        newapiLoggedIn: result.loggedIn,
+        newapiUser: result.userInfo || null
+      })
+    } catch {
+      set({ newapiLoggedIn: false, newapiUser: null })
+    }
+  },
+
+  newapiFetchModels: async () => {
+    try {
+      const result = await ipc.newapiGetModels()
+      if (result.success) {
+        set({ newapiModels: result.models || [] })
+      }
+    } catch {
+      // ignore
+    }
+  },
+
+  newapiSetModel: async (model) => {
+    set({ verificationMessage: null })
+    try {
+      await ipc.newapiSetModel({ model })
+      await get().fetchSettings()
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '切换模型失败。'
+      set({ verificationMessage: message })
+    }
+  },
+
+  newapiRefreshUser: async () => {
+    try {
+      const result = await ipc.newapiRefreshUser()
+      if (result.success && result.userInfo) {
+        set({ newapiUser: result.userInfo })
+      }
+    } catch {
+      // ignore
     }
   }
 }))

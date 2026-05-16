@@ -8,6 +8,9 @@ import {
   resolveModelTimeoutMs
 } from '@shared/model-timeout'
 import { readAppLocale, uiText } from '../config/locale-utils'
+import * as newapi from '../../services/newapi'
+
+const NEWAPI_BASE_URL = 'https://new-api.chaoxi.live/v1'
 
 const readGlobalTimeouts = (
   settings: Record<string, unknown>
@@ -267,6 +270,228 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           : '无法打开系统目录选择器。'
       log.error('[settings:chooseStoragePath] failed', { message })
       return { path: null, error: message }
+    }
+  })
+
+  // ---------- NewAPI handlers ----------
+
+  /** 登录 NewAPI：登录 → 确保令牌 → 写入 model_configs */
+  ipcMain.handle('newapi:login', async (_event, { username, password }) => {
+    const locale = await readAppLocale(ctx)
+    log.info('[newapi:login] attempt', { username })
+    try {
+      const loginResult = await newapi.login(username, password)
+      const session = { cookie: loginResult.cookie, userId: loginResult.userId }
+
+      // 获取用户信息
+      const userInfo = await newapi.getUserInfo(session)
+
+      // 确保令牌存在，拿到 api key
+      const { tokenId, apiKey } = await newapi.ensureToken(session)
+
+      // 通过 OpenAI 标准接口获取可用模型
+      const models = await newapi.getModelsByApiKey(apiKey)
+
+      // 持久化 session 信息
+      await db.setSetting('newapi_session_cookie', loginResult.cookie)
+      await db.setSetting('newapi_user_id', String(loginResult.userId))
+      await db.setSetting('newapi_token_id', String(tokenId))
+      await db.setSetting('newapi_username', loginResult.username)
+      await db.setSetting('newapi_display_name', loginResult.displayName)
+
+      // 自动创建/更新 model_config（openai 兼容格式）
+      const modelIds = models.map((m) => m.id)
+      const defaultModel = modelIds.includes('gpt-4o-mini') ? 'gpt-4o-mini' : modelIds[0] || ''
+      const existing = (await db.listModelConfigs()).find(
+        (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
+      )
+      if (existing) {
+        await db.upsertModelConfig({
+          id: existing.id,
+          name: 'chaoxi-ppt',
+          provider: 'openai',
+          model: defaultModel,
+          apiKey: encryptApiKey(apiKey),
+          baseUrl: NEWAPI_BASE_URL,
+          active: true
+        })
+      } else {
+        await db.upsertModelConfig({
+          name: 'chaoxi-ppt',
+          provider: 'openai',
+          model: defaultModel,
+          apiKey: encryptApiKey(apiKey),
+          baseUrl: NEWAPI_BASE_URL,
+          active: true
+        })
+      }
+
+      log.info('[newapi:login] success', { userId: loginResult.userId, modelCount: models.length })
+
+      return {
+        success: true,
+        userInfo: {
+          id: userInfo.id,
+          username: userInfo.username,
+          displayName: userInfo.display_name,
+          quota: userInfo.quota,
+          usedQuota: userInfo.used_quota,
+          status: userInfo.status
+        },
+        models
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : uiText(locale, '登录失败，请检查用户名和密码。', 'Login failed. Check username and password.')
+      log.error('[newapi:login] failed', { message })
+      return { success: false, message }
+    }
+  })
+
+  /** 注册 NewAPI */
+  ipcMain.handle('newapi:register', async (_event, { username, password, email }) => {
+    const locale = await readAppLocale(ctx)
+    try {
+      await newapi.register(username, password, email)
+      return { success: true }
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : uiText(locale, '注册失败。', 'Registration failed.')
+      log.error('[newapi:register] failed', { message })
+      return { success: false, message }
+    }
+  })
+
+  /** 获取 NewAPI 登录状态 */
+  ipcMain.handle('newapi:getStatus', async () => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    if (!cookie || !userId) {
+      return { loggedIn: false }
+    }
+    try {
+      const session = { cookie, userId }
+      const userInfo = await newapi.getUserInfo(session)
+      return {
+        loggedIn: true,
+        userInfo: {
+          id: userInfo.id,
+          username: userInfo.username,
+          displayName: userInfo.display_name,
+          quota: userInfo.quota,
+          usedQuota: userInfo.used_quota,
+          status: userInfo.status
+        }
+      }
+    } catch {
+      // session 过期
+      return { loggedIn: false }
+    }
+  })
+
+  /** 获取可用模型列表 */
+  ipcMain.handle('newapi:getModels', async () => {
+    const existing = (await db.listModelConfigs()).find(
+      (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
+    )
+    if (!existing) {
+      return { success: false, message: 'Not logged in' }
+    }
+    try {
+      const apiKey = decryptApiKey(existing.apiKey)
+      const models = await newapi.getModelsByApiKey(apiKey)
+      return { success: true, models }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to get models'
+      return { success: false, message }
+    }
+  })
+
+  /** 更新选择的模型 */
+  ipcMain.handle('newapi:setModel', async (_event, { model }) => {
+    const locale = await readAppLocale(ctx)
+    const existing = (await db.listModelConfigs()).find(
+      (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
+    )
+    if (!existing) {
+      throw new Error(uiText(locale, '请先登录。', 'Please login first.'))
+    }
+    await db.upsertModelConfig({
+      id: existing.id,
+      name: existing.name,
+      provider: existing.provider,
+      model,
+      apiKey: existing.apiKey,
+      baseUrl: existing.baseUrl,
+      active: existing.active === 1
+    })
+    return { success: true }
+  })
+
+  /** 退出登录：删除令牌 → 登出 → 清除本地 */
+  ipcMain.handle('newapi:logout', async () => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    const tokenId = typeof settings.newapi_token_id === 'string' ? Number(settings.newapi_token_id) : 0
+
+    if (cookie && userId) {
+      const session = { cookie, userId }
+      try {
+        if (tokenId) await newapi.deleteToken(session, tokenId)
+        await newapi.logout(session)
+      } catch (error) {
+        log.warn('[newapi:logout] remote logout failed', { error })
+      }
+    }
+
+    // 清除本地 session
+    await db.setSetting('newapi_session_cookie', '')
+    await db.setSetting('newapi_user_id', '')
+    await db.setSetting('newapi_token_id', '')
+    await db.setSetting('newapi_username', '')
+    await db.setSetting('newapi_display_name', '')
+
+    // 删除对应的 model_config
+    const existing = (await db.listModelConfigs()).find(
+      (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
+    )
+    if (existing) {
+      await db.deleteModelConfig(existing.id)
+    }
+
+    log.info('[newapi:logout] done')
+    return { success: true }
+  })
+
+  /** 刷新用户信息（检查余额等） */
+  ipcMain.handle('newapi:refreshUser', async () => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    if (!cookie || !userId) {
+      return { success: false }
+    }
+    try {
+      const userInfo = await newapi.getUserInfo({ cookie, userId })
+      return {
+        success: true,
+        userInfo: {
+          id: userInfo.id,
+          username: userInfo.username,
+          displayName: userInfo.display_name,
+          quota: userInfo.quota,
+          usedQuota: userInfo.used_quota,
+          status: userInfo.status
+        }
+      }
+    } catch {
+      return { success: false }
     }
   })
 }
