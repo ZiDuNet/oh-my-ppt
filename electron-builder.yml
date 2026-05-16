@@ -18,6 +18,7 @@ files:
 asarUnpack:
   - resources/**
   - node_modules/@node-rs/**/*.node
+  - node_modules/@cfworker/**/*
 forceCodeSigning: false
 win:
   target:
