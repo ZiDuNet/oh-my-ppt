@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { ipc, type ModelConfig, type ModelInfo, type NewApiUserInfo } from '@renderer/lib/ipc'
+import { ipc, type ModelConfig, type ModelInfo, type NewApiLogItem, type NewApiUserInfo } from '@renderer/lib/ipc'
 import type { ConfigurableModelTimeoutProfile } from '@shared/model-timeout.js'
 
 interface Settings {
@@ -54,6 +54,45 @@ interface SettingsStore {
   newapiFetchModels: () => Promise<void>
   newapiSetModel: (model: string) => Promise<void>
   newapiRefreshUser: () => Promise<void>
+  newapiFetchLogs: (page?: number, pageSize?: number) => Promise<void>
+  newapiFetchTokenUsage: () => Promise<void>
+
+  // usage data
+  newapiLogs: NewApiLogItem[]
+  newapiLogsTotal: number
+  newapiLogsPage: number
+  newapiTokenUsage: {
+    name: string
+    usedQuota: number
+    remainQuota: number
+    unlimitedQuota: boolean
+    status: number
+    accessedTime: number
+  } | null
+  newapiSubscription: {
+    subscriptions: Array<{
+      id: number
+      planId: number
+      status: string
+      amountTotal: number
+      amountUsed: number
+      startTime: number
+      endTime: number
+    }>
+    billingPreference: string
+  } | null
+  newapiPlans: Array<{
+    id: number
+    title: string
+    subtitle: string
+    priceAmount: number
+    currency: string
+    durationUnit: string
+    durationValue: number
+    totalAmount: number
+    enabled: boolean
+  }>
+  newapiFetchSubscription: () => Promise<void>
 }
 
 const readStoredLocale = (): 'zh' | 'en' => {
@@ -74,6 +113,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   newapiLoggedIn: false,
   newapiModels: [],
   newapiLoading: false,
+  newapiLogs: [],
+  newapiLogsTotal: 0,
+  newapiLogsPage: 0,
+  newapiTokenUsage: null,
+  newapiSubscription: null,
+  newapiPlans: [],
 
   fetchSettings: async () => {
     try {
@@ -259,6 +304,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         newapiLoggedIn: result.loggedIn,
         newapiUser: result.userInfo || null
       })
+      if (result.loggedIn) {
+        const modelResult = await ipc.newapiGetModels()
+        if (modelResult.success) {
+          set({ newapiModels: modelResult.models || [] })
+        }
+      }
     } catch {
       set({ newapiLoggedIn: false, newapiUser: null })
     }
@@ -294,6 +345,44 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const result = await ipc.newapiRefreshUser()
       if (result.success && result.userInfo) {
         set({ newapiUser: result.userInfo })
+      }
+    } catch {
+      // ignore
+    }
+  },
+
+  newapiFetchLogs: async (page = 0, pageSize = 20) => {
+    try {
+      const result = await ipc.newapiGetLogs({ page, pageSize })
+      if (result.success) {
+        const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 3600
+        const filtered = result.items.filter((item) => item.createdAt >= threeDaysAgo)
+        set({ newapiLogs: filtered, newapiLogsTotal: result.total, newapiLogsPage: page })
+      }
+    } catch {
+      // ignore
+    }
+  },
+
+  newapiFetchTokenUsage: async () => {
+    try {
+      const result = await ipc.newapiGetTokenUsage()
+      if (result.success && result.usage) {
+        set({ newapiTokenUsage: result.usage })
+      }
+    } catch {
+      // ignore
+    }
+  },
+
+  newapiFetchSubscription: async () => {
+    try {
+      const result = await ipc.newapiGetSubscription()
+      if (result.success) {
+        set({
+          newapiSubscription: result.subscription || null,
+          newapiPlans: result.plans || []
+        })
       }
     } catch {
       // ignore

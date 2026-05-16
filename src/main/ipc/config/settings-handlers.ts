@@ -300,26 +300,26 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       await db.setSetting('newapi_display_name', loginResult.displayName)
 
       // 自动创建/更新 model_config（openai 兼容格式）
-      const modelIds = models.map((m) => m.id)
-      const defaultModel = modelIds.includes('gpt-4o-mini') ? 'gpt-4o-mini' : modelIds[0] || ''
       const existing = (await db.listModelConfigs()).find(
         (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
       )
       if (existing) {
+        // 已有配置：只更新 apiKey，保留用户选择的模型
         await db.upsertModelConfig({
           id: existing.id,
           name: 'chaoxi-ppt',
           provider: 'openai',
-          model: defaultModel,
+          model: existing.model,
           apiKey: encryptApiKey(apiKey),
           baseUrl: NEWAPI_BASE_URL,
           active: true
         })
       } else {
+        // 首次登录：模型留空，让用户自己选择
         await db.upsertModelConfig({
           name: 'chaoxi-ppt',
           provider: 'openai',
-          model: defaultModel,
+          model: '',
           apiKey: encryptApiKey(apiKey),
           baseUrl: NEWAPI_BASE_URL,
           active: true
@@ -328,15 +328,24 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
 
       log.info('[newapi:login] success', { userId: loginResult.userId, modelCount: models.length })
 
+      // 从令牌获取用量信息
+      const tokenUsage = await newapi.getTokenUsage(session, 'chaoxi-ppt')
+
       return {
         success: true,
         userInfo: {
           id: userInfo.id,
           username: userInfo.username,
           displayName: userInfo.display_name,
+          email: userInfo.email || '',
+          group: userInfo.group || '',
+          role: userInfo.role,
           quota: userInfo.quota,
           usedQuota: userInfo.used_quota,
-          status: userInfo.status
+          remainQuota: tokenUsage?.remainQuota ?? 0,
+          unlimitedQuota: tokenUsage?.unlimitedQuota ?? false,
+          status: userInfo.status,
+          requestCount: userInfo.request_count
         },
         models
       }
@@ -377,15 +386,23 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     try {
       const session = { cookie, userId }
       const userInfo = await newapi.getUserInfo(session)
+      // 从令牌获取 remain_quota / unlimited_quota（/api/user/self 没有这些字段）
+      const tokenUsage = await newapi.getTokenUsage(session, 'chaoxi-ppt')
       return {
         loggedIn: true,
         userInfo: {
           id: userInfo.id,
           username: userInfo.username,
           displayName: userInfo.display_name,
+          email: userInfo.email || '',
+          group: userInfo.group || '',
+          role: userInfo.role,
           quota: userInfo.quota,
           usedQuota: userInfo.used_quota,
-          status: userInfo.status
+          remainQuota: tokenUsage?.remainQuota ?? 0,
+          unlimitedQuota: tokenUsage?.unlimitedQuota ?? false,
+          status: userInfo.status,
+          requestCount: userInfo.request_count
         }
       }
     } catch {
@@ -478,19 +495,84 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       return { success: false }
     }
     try {
-      const userInfo = await newapi.getUserInfo({ cookie, userId })
+      const session = { cookie, userId }
+      const userInfo = await newapi.getUserInfo(session)
+      const tokenUsage = await newapi.getTokenUsage(session, 'chaoxi-ppt')
       return {
         success: true,
         userInfo: {
           id: userInfo.id,
           username: userInfo.username,
           displayName: userInfo.display_name,
+          email: userInfo.email || '',
+          group: userInfo.group || '',
+          role: userInfo.role,
           quota: userInfo.quota,
           usedQuota: userInfo.used_quota,
-          status: userInfo.status
+          remainQuota: tokenUsage?.remainQuota ?? 0,
+          unlimitedQuota: tokenUsage?.unlimitedQuota ?? false,
+          status: userInfo.status,
+          requestCount: userInfo.request_count
         }
       }
     } catch {
+      return { success: false }
+    }
+  })
+
+  /** 获取用量日志 */
+  ipcMain.handle('newapi:getLogs', async (_event, payload) => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    if (!cookie || !userId) {
+      return { success: false, items: [], total: 0 }
+    }
+    try {
+      const page = typeof payload?.page === 'number' ? payload.page : 0
+      const pageSize = Math.min(typeof payload?.pageSize === 'number' ? payload.pageSize : 20, 500)
+      const result = await newapi.getSelfLogs({ cookie, userId }, page, pageSize)
+      return { success: true, items: result.items, total: result.total }
+    } catch (error) {
+      log.warn('[newapi:getLogs] failed', { error })
+      return { success: false, items: [], total: 0 }
+    }
+  })
+
+  /** 获取令牌用量 */
+  ipcMain.handle('newapi:getTokenUsage', async () => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    if (!cookie || !userId) {
+      return { success: false }
+    }
+    try {
+      const usage = await newapi.getTokenUsage({ cookie, userId }, 'chaoxi-ppt')
+      return { success: true, usage }
+    } catch (error) {
+      log.warn('[newapi:getTokenUsage] failed', { error })
+      return { success: false }
+    }
+  })
+
+  /** 获取订阅信息 */
+  ipcMain.handle('newapi:getSubscription', async () => {
+    const settings = await db.getAllSettings()
+    const cookie = typeof settings.newapi_session_cookie === 'string' ? settings.newapi_session_cookie : ''
+    const userId = typeof settings.newapi_user_id === 'string' ? Number(settings.newapi_user_id) : 0
+    if (!cookie || !userId) {
+      return { success: false }
+    }
+    try {
+      const session = { cookie, userId }
+      const [subscription, plans] = await Promise.all([
+        newapi.getSubscriptionSelf(session),
+        newapi.getSubscriptionPlans(session)
+      ])
+      return { success: true, subscription, plans }
+    } catch (error) {
+      log.warn('[newapi:getSubscription] failed', { error })
       return { success: false }
     }
   })

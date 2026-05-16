@@ -16,6 +16,8 @@ export interface NewApiUserInfo {
   quota: number
   used_quota: number
   request_count: number
+  remain_quota: number
+  unlimited_quota: boolean
 }
 
 export interface NewApiToken {
@@ -152,7 +154,7 @@ export async function createToken(
     remain_quota: 0,
     unlimited_quota: true,
     expired_time: -1,
-    group: opts?.group || ''
+    group: opts?.group || 'group_ppt'
   })
 }
 
@@ -234,5 +236,191 @@ export async function ensureToken(session: {
     tokenId: token.id,
     apiKey: `sk-${rawKey}`
   }
+}
+
+// ---------- token usage & logs ----------
+
+export interface SubscriptionInfo {
+  id: number
+  planId: number
+  status: string
+  amountTotal: number
+  amountUsed: number
+  startTime: number
+  endTime: number
+}
+
+export interface SubscriptionSelf {
+  subscriptions: SubscriptionInfo[]
+  billingPreference: string
+}
+
+/** 获取当前用户订阅信息 */
+export async function getSubscriptionSelf(
+  session: { cookie: string; userId: number }
+): Promise<SubscriptionSelf> {
+  const json = await request<{
+    data: {
+      subscriptions: Array<{
+        subscription: {
+          id: number
+          plan_id: number
+          status: string
+          amount_total: number
+          amount_used: number
+          start_time: number
+          end_time: number
+        }
+      }>
+      billing_preference: string
+    }
+  }>('GET', '/api/subscription/self', session)
+  return {
+    subscriptions: (json.data?.subscriptions || []).map((s) => ({
+      id: s.subscription.id,
+      planId: s.subscription.plan_id,
+      status: s.subscription.status,
+      amountTotal: s.subscription.amount_total,
+      amountUsed: s.subscription.amount_used,
+      startTime: s.subscription.start_time,
+      endTime: s.subscription.end_time
+    })),
+    billingPreference: json.data?.billing_preference || ''
+  }
+}
+
+export interface SubscriptionPlan {
+  id: number
+  title: string
+  subtitle: string
+  priceAmount: number
+  currency: string
+  durationUnit: string
+  durationValue: number
+  totalAmount: number
+  enabled: boolean
+}
+
+/** 获取可用套餐列表 */
+export async function getSubscriptionPlans(
+  session: { cookie: string; userId: number }
+): Promise<SubscriptionPlan[]> {
+  const json = await request<{
+    data: Array<{
+      plan: {
+        id: number
+        title: string
+        subtitle: string
+        price_amount: number
+        currency: string
+        duration_unit: string
+        duration_value: number
+        total_amount: number
+        enabled: boolean
+      }
+    }>
+  }>('GET', '/api/subscription/plans', session)
+  return (json.data || []).map((p) => ({
+    id: p.plan.id,
+    title: p.plan.title,
+    subtitle: p.plan.subtitle,
+    priceAmount: p.plan.price_amount,
+    currency: p.plan.currency,
+    durationUnit: p.plan.duration_unit,
+    durationValue: p.plan.duration_value,
+    totalAmount: p.plan.total_amount,
+    enabled: p.plan.enabled
+  }))
+}
+
+export interface TokenUsage {
+  name: string
+  usedQuota: number
+  remainQuota: number
+  unlimitedQuota: boolean
+  status: number
+  accessedTime: number
+}
+
+/** 通过令牌名称获取令牌用量 */
+export async function getTokenUsage(
+  session: { cookie: string; userId: number },
+  tokenName: string
+): Promise<TokenUsage | null> {
+  const tokens = await searchToken(session, tokenName)
+  if (tokens.length === 0) return null
+  const t = tokens[0]
+  return {
+    name: t.name,
+    usedQuota: t.used_quota,
+    remainQuota: t.remain_quota,
+    unlimitedQuota: t.unlimited_quota,
+    status: t.status,
+    accessedTime: t.accessed_time
+  }
+}
+
+export interface LogItem {
+  id: number
+  tokenName: string
+  modelName: string
+  quota: number
+  promptTokens: number
+  completionTokens: number
+  useTime: number
+  isStream: boolean
+  createdAt: number
+  billingSource: string
+  requestPath: string
+}
+
+/** 获取当前用户调用日志 */
+export async function getSelfLogs(
+  session: { cookie: string; userId: number },
+  page?: number,
+  pageSize?: number
+): Promise<{ items: LogItem[]; total: number }> {
+  const p = page ?? 0
+  const ps = pageSize ?? 50
+  const json = await request<{
+    data: {
+      total: number
+      items: Array<{
+        id: number
+        token_name: string
+        model_name: string
+        quota: number
+        prompt_tokens: number
+        completion_tokens: number
+        use_time: number
+        is_stream: boolean
+        created_at: number
+        other: string
+      }>
+    }
+  }>('GET', `/api/log/self?p=${p}&page_size=${ps}`, session)
+  const items: LogItem[] = (json.data?.items || []).map((item) => {
+    let billingSource = ''
+    let requestPath = ''
+    try {
+      const other = JSON.parse(item.other || '{}')
+      billingSource = other.billing_source || ''
+      requestPath = other.request_path || ''
+    } catch {}
+    return {
+      id: item.id,
+      tokenName: item.token_name,
+      modelName: item.model_name,
+      quota: item.quota,
+      promptTokens: item.prompt_tokens,
+      completionTokens: item.completion_tokens,
+      useTime: item.use_time,
+      isStream: item.is_stream,
+      createdAt: item.created_at,
+      billingSource,
+      requestPath
+    }
+  })
+  return { items, total: json.data?.total || 0 }
 }
 

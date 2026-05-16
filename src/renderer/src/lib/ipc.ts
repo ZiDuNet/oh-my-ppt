@@ -156,9 +156,15 @@ export interface NewApiUserInfo {
   id: number
   username: string
   displayName: string
+  email: string
+  group: string
+  role: number
   quota: number
   usedQuota: number
+  remainQuota: number
+  unlimitedQuota: boolean
   status: number
+  requestCount: number
 }
 
 export interface ModelInfo {
@@ -528,5 +534,81 @@ export const ipc = {
     getIpc().invoke('newapi:refreshUser') as Promise<{
       success: boolean
       userInfo?: NewApiUserInfo
+    }>,
+  newapiGetLogs: (payload: { page?: number; pageSize?: number }) =>
+    getIpc().invoke('newapi:getLogs', payload) as Promise<{
+      success: boolean
+      items: NewApiLogItem[]
+      total: number
+    }>,
+  newapiGetTokenUsage: () =>
+    getIpc().invoke('newapi:getTokenUsage') as Promise<{
+      success: boolean
+      usage?: {
+        name: string
+        usedQuota: number
+        remainQuota: number
+        unlimitedQuota: boolean
+        status: number
+        accessedTime: number
+      }
+    }>,
+  newapiGetSubscription: () =>
+    getIpc().invoke('newapi:getSubscription') as Promise<{
+      success: boolean
+      subscription?: {
+        subscriptions: Array<{
+          id: number
+          planId: number
+          status: string
+          amountTotal: number
+          amountUsed: number
+          startTime: number
+          endTime: number
+        }>
+        billingPreference: string
+      }
+      plans?: Array<{
+        id: number
+        title: string
+        subtitle: string
+        priceAmount: number
+        currency: string
+        durationUnit: string
+        durationValue: number
+        totalAmount: number
+        enabled: boolean
+      }>
     }>
+}
+
+export interface NewApiLogItem {
+  id: number
+  tokenName: string
+  modelName: string
+  quota: number
+  promptTokens: number
+  completionTokens: number
+  useTime: number
+  isStream: boolean
+  createdAt: number
+  billingSource: string
+  requestPath: string
+}
+
+const QUOTA_UNITS = [
+  { divisor: 100000000, label: '亿' },
+  { divisor: 10000000, label: '千万' },
+  { divisor: 10000, label: '万' }
+] as const
+
+export function formatQuota(value: number | undefined | null): string {
+  if (value == null) return '-'
+  if (value === 0) return '0'
+  for (const { divisor, label } of QUOTA_UNITS) {
+    if (value >= divisor) {
+      return `${parseFloat((value / divisor).toFixed(3))} ${label}`
+    }
+  }
+  return `${value}`
 }
