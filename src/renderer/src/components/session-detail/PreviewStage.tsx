@@ -22,6 +22,7 @@ export const PreviewStage = forwardRef<
     selectedPage: SessionPreviewPage | null
     sessionTitle?: string | null
     isGenerating: boolean
+    sessionLoading?: boolean
     progressLabel?: string
     previewRefreshKey?: number
     isSavingEdits?: boolean
@@ -45,6 +46,7 @@ export const PreviewStage = forwardRef<
     selectedPage,
     sessionTitle,
     isGenerating,
+    sessionLoading = false,
     progressLabel,
     previewRefreshKey = 0,
     isSavingEdits = false,
@@ -311,19 +313,34 @@ export const PreviewStage = forwardRef<
           </div>
         ) : (
           <div className="relative flex h-full min-h-[420px] flex-col items-center justify-center gap-4 rounded-[1.55rem] bg-[#f5f1e8]/84 text-center text-[#5d6b4d] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.32)]">
-            {isGenerating ? (
-              <Loader2 className="h-7 w-7 animate-spin text-[#5d6b4d]" />
+            {sessionLoading || isGenerating ? (
+              <>
+                <div className="relative flex items-center justify-center">
+                  <div className="absolute h-16 w-16 animate-ping rounded-full bg-[#d4e4c1]/30" />
+                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-[#d4e4c1] border-t-[#5d7b4d]" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-base font-medium text-[#3e4a32]">
+                    {sessionLoading ? '正在加载会话...' : t('sessionDetail.emptyPreviewTitle')}
+                  </p>
+                  <p className="text-sm text-[#8a9a7b]">
+                    {sessionLoading
+                      ? '请稍候，正在恢复会话状态'
+                      : t('sessionDetail.preparingPreview')}
+                  </p>
+                </div>
+              </>
             ) : (
-              <Sparkles className="h-7 w-7 text-[#8fbc8f]" />
+              <>
+                <Sparkles className="h-7 w-7 text-[#8fbc8f]" />
+                <div className="space-y-1">
+                  <p className="text-base font-medium text-[#3e4a32]">
+                    {t('sessionDetail.emptyPreviewTitle')}
+                  </p>
+                  <p className="text-sm">{t('sessionDetail.briefHint')}</p>
+                </div>
+              </>
             )}
-            <div className="space-y-1">
-              <p className="text-base font-medium text-[#3e4a32]">
-                {t('sessionDetail.emptyPreviewTitle')}
-              </p>
-              <p className="text-sm">
-                {isGenerating ? t('sessionDetail.preparingPreview') : t('sessionDetail.briefHint')}
-              </p>
-            </div>
           </div>
         )}
       </div>

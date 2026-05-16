@@ -159,6 +159,8 @@ export function SessionDetailPage(): React.JSX.Element {
     warning: toastWarning
   } = useToastStore()
 
+  const [sessionLoading, setSessionLoading] = useState(true)
+
   const orderedPages = useMemo(
     () => [...currentPages].sort((a, b) => a.pageNumber - b.pageNumber),
     [currentPages]
@@ -254,10 +256,11 @@ export function SessionDetailPage(): React.JSX.Element {
 
   useEffect(() => {
     if (!id) return
+    setSessionLoading(true)
     setMessages([])
     useGenerateStore.getState().setPages([])
     resetForSessionChange()
-    void loadSession(id)
+    void loadSession(id).finally(() => setSessionLoading(false))
     // Cleanup on unmount (leaving session-detail)
     return () => {
       useGenerateStore.getState().reset()
@@ -1405,6 +1408,7 @@ export function SessionDetailPage(): React.JSX.Element {
             selectedPage={selectedPage}
             sessionTitle={currentSession?.title}
             isGenerating={isGenerating}
+            sessionLoading={sessionLoading}
             progressLabel={progress?.label}
             previewRefreshKey={previewRefreshKey}
             isSavingEdits={isSavingEdits}
