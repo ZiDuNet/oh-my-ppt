@@ -74,7 +74,13 @@
     "tiktoken": "^1.0.18",
     "turndown": "^7.2.4",
     "zod": "^3.24.1",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.3",
+    "@cfworker/json-schema": "^4.1.1",
+    "mustache": "^4.2.0",
+    "js-tiktoken": "^1.0.19",
+    "uuid": "^11.0.0",
+    "yaml": "^2.7.0",
+    "zod-to-json-schema": "^3.24.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
