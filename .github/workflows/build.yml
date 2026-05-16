@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+      - CXNEWAPI
 
 permissions:
   contents: write
@@ -31,10 +34,35 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Package & Publish
+      - name: Determine publish mode
+        id: ctx
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "publish=always" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=never" >> "$GITHUB_OUTPUT"
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            VERSION=$(node -p "require('./package.json').version")
+            echo "artifact=OhMyPPT-v${VERSION}-${BRANCH}-win" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package (tag release)
+        if: steps.ctx.outputs.publish == 'always'
         run: pnpm electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package (branch build)
+        if: steps.ctx.outputs.publish == 'never'
+        run: pnpm electron-builder --win --publish never
+
+      - name: Upload artifact
+        if: steps.ctx.outputs.publish == 'never'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.ctx.outputs.artifact }}
+          path: dist/*.exe
 
   build-mac:
     runs-on: macos-latest
@@ -58,7 +86,34 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Package & Publish
+      - name: Determine publish mode
+        id: ctx
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "publish=always" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=never" >> "$GITHUB_OUTPUT"
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            VERSION=$(node -p "require('./package.json').version")
+            echo "artifact=OhMyPPT-v${VERSION}-${BRANCH}-mac" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package (tag release)
+        if: steps.ctx.outputs.publish == 'always'
         run: pnpm electron-builder --mac --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package (branch build)
+        if: steps.ctx.outputs.publish == 'never'
+        run: pnpm electron-builder --mac --publish never
+
+      - name: Upload artifact
+        if: steps.ctx.outputs.publish == 'never'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.ctx.outputs.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
