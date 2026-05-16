@@ -13,12 +13,17 @@ import {
   buildSinglePageGenerationPrompt,
   CONTENT_LANGUAGE_RULES
 } from '../../prompt'
-import type { GenerateChunkEvent } from '@shared/generation'
+import type { FontSelection, GenerateChunkEvent } from '@shared/generation'
 import { normalizeLayoutIntent, type LayoutIntent } from '@shared/layout-intent'
 import { resolveModelTimeoutMs, type ModelTimeoutProfile } from '@shared/model-timeout'
 import { progressLabel, progressText } from '@shared/progress'
 import type { DeckEditScope, DesignContract, OutlineItem } from '../../tools/types'
 import { isPlaceholderPageHtml } from '../../tools/html-utils'
+import {
+  assertFontFamilyAvailable,
+  buildAvailableFontsForPrompt,
+  type AvailableFont
+} from '../../tools/font-registry'
 import { extractModelText, extractJsonBlock, sleep } from '../utils'
 import {
   createReferenceDocumentRetriever,
@@ -149,18 +154,6 @@ const normalizeKeyPoints = (value: unknown): string[] => {
     .map((item) => (item.length > 24 ? `${item.slice(0, 24).trimEnd()}…` : item))
 }
 
-const DEFAULT_DESIGN_CONTRACT: DesignContract = {
-  theme: 'cohesive editorial presentation',
-  background: 'root uses a consistent full-canvas background with no exposed white edges',
-  palette: ['#f8fafc', '#334155', '#64748b', '#94a3b8'],
-  titleStyle: 'text-5xl font-semibold text-slate-800',
-  layoutMotif:
-    'varied 16:9 editorial layouts with flexible title placement inside the content area',
-  chartStyle: 'readable Chart.js v4 charts with restrained colors and stable canvas height',
-  shapeLanguage: '8px radius, light borders, subtle shadows',
-  fonts: 'Poppins'
-}
-
 const normalizeDesignContract = (value: unknown): DesignContract => {
   const record =
     value && typeof value === 'object' && !Array.isArray(value)
@@ -170,28 +163,23 @@ const normalizeDesignContract = (value: unknown): DesignContract => {
     const text = String(record[key] ?? '')
       .replace(/\s+/g, ' ')
       .trim()
-    const fallback = DEFAULT_DESIGN_CONTRACT[key] ?? ''
-    const resolved = text || fallback
-    return resolved.length > 220 ? `${resolved.slice(0, 220).trimEnd()}…` : resolved
+    return text.length > 220 ? `${text.slice(0, 220).trimEnd()}…` : text
   }
   const paletteRaw = Array.isArray(record.palette) ? record.palette : []
   const palette = paletteRaw
     .map((item) => String(item ?? '').trim())
     .filter((item) => item.length > 0)
     .slice(0, 6)
-  const resolvedPalette =
-    palette.length >= 3
-      ? palette
-      : Array.from(new Set([...palette, ...DEFAULT_DESIGN_CONTRACT.palette])).slice(0, 6)
   return {
     theme: readText('theme'),
     background: readText('background'),
-    palette: resolvedPalette,
+    palette,
     titleStyle: readText('titleStyle'),
     layoutMotif: readText('layoutMotif'),
     chartStyle: readText('chartStyle'),
     shapeLanguage: readText('shapeLanguage'),
-    fonts: readText('fonts')
+    titleFont: readText('titleFont'),
+    bodyFont: readText('bodyFont')
   }
 }
 
@@ -310,11 +298,25 @@ const buildDesignContractRetryUserPrompt = (userPrompt: string, previousError: s
     'Design contract retry requirement:',
     `- The previous design contract response failed validation: ${previousError}`,
     '- Retry now and return only a raw JSON object. Do not wrap it in Markdown. Do not add explanations.',
-    '- Use exactly these fields: theme, background, palette, titleStyle, layoutMotif, chartStyle, shapeLanguage, fonts.',
+    '- Use exactly these fields: theme, background, palette, titleStyle, layoutMotif, chartStyle, shapeLanguage, titleFont, bodyFont.',
     '- palette must be an array with 3-6 color strings.',
-    '- fonts must be a comma-separated string of font names from the font list in the original system prompt.',
+    '- titleFont and bodyFont must be exact family values from availableFonts in the original system prompt.',
     '- titleStyle should usually use text-4xl or text-5xl and must not use text-6xl, text-7xl, or text-8xl.'
   ].join('\n')
+
+const detectFontLanguageHint = (text: string): string => {
+  if (/[\u3400-\u9fff]/.test(text)) return 'cjk'
+  return 'latin'
+}
+
+const resolveFontPair = (
+  value: FontSelection | undefined
+): { titleFont: string; bodyFont: string } | null => {
+  if (!value || value.mode !== 'pair') return null
+  const titleFont = String(value.title?.family || '').trim()
+  const bodyFont = String(value.body?.family || '').trim()
+  return titleFont && bodyFont ? { titleFont, bodyFont } : null
+}
 
 export const planDeckWithLLM = async (args: {
   provider: string
@@ -624,6 +626,9 @@ export const buildDesignContractWithLLM = async (args: {
   appLocale?: AppLocale
   modelTimeoutMs?: number
   totalPages: number
+  topic?: string
+  userMessage?: string
+  fontSelection?: FontSelection
   emit?: (chunk: GenerateChunkEvent) => void
   runId?: string
   signal?: AbortSignal
@@ -637,9 +642,23 @@ export const buildDesignContractWithLLM = async (args: {
     args.maxTokens
   )
   const totalPages = Math.max(1, args.totalPages)
-  const systemPrompt = buildDesignContractSystemPrompt(args.styleSkillPrompt)
+  const availableFonts: AvailableFont[] = await buildAvailableFontsForPrompt()
+  const requestedFontPair = resolveFontPair(args.fontSelection)
+  if (requestedFontPair) {
+    await assertFontFamilyAvailable(requestedFontPair.titleFont, 'titleFont')
+    await assertFontFamilyAvailable(requestedFontPair.bodyFont, 'bodyFont')
+  }
+  const languageHint = detectFontLanguageHint(
+    [args.topic || '', args.userMessage || '', args.styleSkillPrompt || ''].join('\n')
+  )
+  const systemPrompt = buildDesignContractSystemPrompt({
+    styleSkill: args.styleSkillPrompt,
+    availableFonts,
+    requestedFontPair,
+    languageHint
+  })
   const userPrompt = buildDesignContractUserPrompt()
-  const parseDesignContract = (responseText: string): DesignContract => {
+  const parseDesignContract = async (responseText: string): Promise<DesignContract> => {
     const parsed = parseModelJson(responseText, args.appLocale)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error(
@@ -659,7 +678,8 @@ export const buildDesignContractWithLLM = async (args: {
       'layoutMotif',
       'chartStyle',
       'shapeLanguage',
-      'fonts'
+      'titleFont',
+      'bodyFont'
     ]
     const missingKeys = requiredKeys.filter(
       (key) => record[key] === undefined || record[key] === ''
@@ -682,7 +702,21 @@ export const buildDesignContractWithLLM = async (args: {
         )
       )
     }
-    return normalizeDesignContract(parsed)
+    const contract = normalizeDesignContract(parsed)
+    if (requestedFontPair) {
+      if (contract.titleFont !== requestedFontPair.titleFont || contract.bodyFont !== requestedFontPair.bodyFont) {
+        throw new Error(
+          uiText(
+            args.appLocale,
+            `LLM design_contract 字体与用户选择不一致：titleFont=${contract.titleFont}, bodyFont=${contract.bodyFont}`,
+            `LLM design_contract fonts do not match the user selection: titleFont=${contract.titleFont}, bodyFont=${contract.bodyFont}`
+          )
+        )
+      }
+    }
+    await assertFontFamilyAvailable(contract.titleFont, 'titleFont')
+    await assertFontFamilyAvailable(contract.bodyFont, 'bodyFont')
+    return contract
   }
   args.emit?.({
     type: 'llm_status',
@@ -746,7 +780,7 @@ export const buildDesignContractWithLLM = async (args: {
           responseText.length > 240 ? `${responseText.slice(0, 240)}…` : responseText
         )
       })
-      const contract = parseDesignContract(responseText)
+      const contract = await parseDesignContract(responseText)
       args.emit?.({
         type: 'llm_status',
         payload: {
@@ -778,14 +812,22 @@ export const buildDesignContractWithLLM = async (args: {
       }
     }
   }
-  log.warn('[llm] design_contract fallback', {
+  log.warn('[llm] design_contract failed', {
     provider: args.provider,
     model: args.model,
     temperature: args.temperature ?? null,
     styleId: args.styleId || '',
     message: lastError instanceof Error ? lastError.message : String(lastError)
   })
-  return normalizeDesignContract(null)
+  throw new Error(
+    uiText(
+      args.appLocale,
+      `设计契约生成失败：${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      `Failed to generate design contract: ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`
+    )
+  )
 }
 
 export const runDeepAgentDeckGeneration = async (args: {

@@ -156,16 +156,14 @@ export const validateHtmlContent = (html: string): { valid: boolean; errors: str
   if (/<title[\s>]/i.test(html) || /<\/title>/i.test(html)) {
     errors.push('检测到 <title> 标签。页面片段中禁止包含标题标签。')
   }
-  const linkTags = Array.from(html.matchAll(/<link\b[^>]*>/gi)).map((m) => m[0])
-  const disallowedLinks = linkTags.filter(
-    (tag) =>
-      !/(?:fonts\.googleapis\.com|fonts\.gstatic\.com)/.test(tag) ||
-      /\brel\s*=\s*["'](?:icon|preload|prefetch|preconnect)["']/i.test(tag)
-  )
-  if (disallowedLinks.length > 0) {
-    errors.push(
-      '检测到 <link> 标签。仅允许 Google Fonts CDN (<link href="https://fonts.googleapis.com/css2?family=...">)，其他外部资源链接被禁止。'
-    )
+  if (/<link\b[^>]*>/i.test(html)) {
+    errors.push('检测到 <link> 标签。页面片段中禁止引入字体或外部资源，字体由系统统一注入。')
+  }
+  if (/@font-face\b/i.test(html)) {
+    errors.push('检测到 @font-face。页面片段中禁止声明字体，字体由系统统一注入。')
+  }
+  if (/url\(\s*["']?(?:https?:)?\/\//i.test(html)) {
+    errors.push('检测到远程 CSS URL。页面片段中禁止引入远程字体或样式资源。')
   }
   if (/data-ppt-guard-root\s*=\s*["']1["']/i.test(html)) {
     errors.push('检测到 data-ppt-guard-root。禁止传入页面骨架根节点，请仅传主体片段。')
@@ -268,16 +266,50 @@ export const validatePersistedPageHtml = (
   if (isPlaceholderPageHtml(html)) {
     errors.push('仍包含页面占位文案')
   }
-  if (REMOTE_SCRIPT_OR_LINK_RE.test(html)) {
-    // Allow Google Fonts CDN; block everything else
-    const allRemote = Array.from(html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)\s*=\s*["'](?:https?:)?\/\/[^"']+["'][^>]*>/gi)).map(m => m[0])
-    const nonGoogleFonts = allRemote.filter(tag => !/(?:fonts\.googleapis\.com|fonts\.gstatic\.com)/.test(tag))
-    if (nonGoogleFonts.length > 0) {
-      errors.push('包含远程 script/link 资源（仅允许 Google Fonts CDN）')
-    }
-  }
-
   const $ = cheerio.load(html, { scriptingEnabled: false })
+  if (REMOTE_SCRIPT_OR_LINK_RE.test(html)) {
+    $('script[src], link[href]').each((_, node) => {
+      const el = $(node)
+      const tagName = String(node.tagName || '').toLowerCase()
+      const rawUrl = String(el.attr(tagName === 'script' ? 'src' : 'href') || '').trim()
+      if (!/^(?:https?:)?\/\//i.test(rawUrl)) return undefined
+      if (tagName !== 'link') {
+        errors.push('包含远程 script 资源')
+        return undefined
+      }
+      try {
+        const parsed = new URL(rawUrl, 'https://placeholder.local')
+        const isAllowedGoogleFonts =
+          el.attr('data-ppt-fonts') === 'google' &&
+          parsed.protocol === 'https:' &&
+          parsed.hostname === 'fonts.googleapis.com' &&
+          parsed.pathname.startsWith('/css2')
+        if (!isAllowedGoogleFonts) {
+          errors.push('包含未授权的远程 link 资源（仅允许系统注入的 Google Fonts CSS）')
+        }
+      } catch {
+        errors.push('包含格式无效的远程 link 资源')
+      }
+      return undefined
+    })
+  }
+  $('style').each((_, node) => {
+    const el = $(node)
+    const css = el.text()
+    if (/@font-face\b/i.test(css) && el.attr('data-ppt-fonts') !== 'user') {
+      errors.push('@font-face 只能由系统字体注入块声明')
+      return false
+    }
+    if (/url\(\s*["']?(?:https?:)?\/\//i.test(css)) {
+      errors.push('样式块中包含远程 URL')
+      return false
+    }
+    if (/url\(\s*["']?(?!\.\/assets\/fonts\/user\/)[^)]+/i.test(css) && el.attr('data-ppt-fonts') === 'user') {
+      errors.push('@font-face 只能引用 ./assets/fonts/user/ 下的字体文件')
+      return false
+    }
+    return undefined
+  })
   $('style').each((_, node) => {
     const css = $(node).text()
     if (HIDDEN_STYLE_RULE_RE.test(css)) {

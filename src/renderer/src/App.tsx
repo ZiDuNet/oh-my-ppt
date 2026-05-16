@@ -7,6 +7,7 @@ import { SessionDetailPage } from './pages/session-detail'
 import { SessionGeneratingPage } from './pages/session-generating'
 import { SettingsPage } from './pages/settings'
 import { StylesPage } from './pages/styles'
+import { FontsPage } from './pages/fonts'
 import { StyleEditorPage } from './pages/style-editor'
 import { PresentationPage } from './pages/presentation'
 import { AppToaster } from './components/AppToaster'
@@ -78,6 +79,7 @@ function App(): React.JSX.Element {
                 <Route path="/" element={<HomePage />} />
                 <Route path="/sessions" element={<SessionsPage />} />
                 <Route path="/styles" element={<StylesPage />} />
+                <Route path="/fonts" element={<FontsPage />} />
                 <Route path="/styles/new" element={<StyleEditorPage />} />
                 <Route path="/styles/:styleId" element={<StyleEditorPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

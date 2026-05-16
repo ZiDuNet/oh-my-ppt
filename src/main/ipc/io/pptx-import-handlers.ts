@@ -206,7 +206,8 @@ export function registerPptxImportHandlers(ctx: IpcContext): void {
           styleId,
           styleSkillPrompt: styleResult.styleSkill,
           modelTimeoutMs: modelTimeouts.document,
-          totalPages: imported.pageCount
+          totalPages: imported.pageCount,
+          topic: title
         })
         await db.updateSessionDesignContract(sessionId, designContract)
         log.info('[pptx:import] design contract generated', { sessionId })

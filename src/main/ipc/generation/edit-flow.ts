@@ -95,7 +95,8 @@ export async function resolveEditContext(
     sourceDocumentPaths: [],
     topic: common.topic,
     deckTitle: common.deckTitle,
-    appLocale: common.appLocale
+    appLocale: common.appLocale,
+    fontSelection: common.fontSelection
   }
 }
 

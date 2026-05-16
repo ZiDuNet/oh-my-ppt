@@ -8,6 +8,7 @@ import { getStyleDetail, hasStyleSkill } from '../../utils/style-skills'
 import type { IpcContext } from '../context'
 import { resolveActiveModelConfig } from '../config/model-config-utils'
 import { readAppLocale, uiText } from '../config/locale-utils'
+import { normalizeFontSelection } from '@shared/generation'
 
 export function registerSessionHandlers(ctx: IpcContext): void {
   const {
@@ -39,6 +40,7 @@ export function registerSessionHandlers(ctx: IpcContext): void {
 
   ipcMain.handle('session:create', async (_event, payload) => {
     const { topic, styleId, pageCount } = payload
+    const fontSelection = normalizeFontSelection(payload?.fontSelection)
     const referenceDocumentPath =
       typeof payload?.referenceDocumentPath === 'string' ? payload.referenceDocumentPath.trim() : ''
     const locale = await readAppLocale(ctx)
@@ -131,6 +133,7 @@ export function registerSessionHandlers(ctx: IpcContext): void {
       pageCount,
       referenceDocumentPath: sessionReferenceDocumentPath
     })
+    await db.updateSessionMetadata(sessionId, { fontSelection })
 
     await db.createProject({
       session_id: sessionId,

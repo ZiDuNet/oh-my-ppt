@@ -142,8 +142,9 @@ export function formatDesignContract(contract?: DesignContract): string {
     `- Chart style: ${contract.chartStyle}`,
     `- Shape language: ${contract.shapeLanguage}`
   ]
-  if (contract.fonts) {
-    lines.push(`- Fonts: ${contract.fonts} (use var(--ppt-title-font) for titles, var(--ppt-body-font) for body)`)
-  }
+  lines.push(
+    `- Title font: ${contract.titleFont} (use var(--ppt-title-font) for titles)`,
+    `- Body font: ${contract.bodyFont} (use var(--ppt-body-font) for body)`
+  )
   return lines.join('\n')
 }

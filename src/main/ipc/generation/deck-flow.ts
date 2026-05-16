@@ -85,7 +85,8 @@ export async function resolveDeckContext(
     sourceDocumentPaths,
     topic: common.topic,
     deckTitle: common.deckTitle,
-    appLocale: common.appLocale
+    appLocale: common.appLocale,
+    fontSelection: common.fontSelection
   }
 }
 
@@ -220,6 +221,9 @@ export async function executeDeckGeneration(
       styleSkillPrompt: context.styleSkill.prompt,
       appLocale: context.appLocale,
       totalPages: context.totalPages,
+      topic: context.topic,
+      userMessage: context.userMessage,
+      fontSelection: context.fontSelection,
       emit: (chunk) => emitDeckChunk(chunk),
       runId: context.runId,
       signal: context.entry.abortController.signal

@@ -70,7 +70,8 @@ export async function resolveRetryContext(
     sourceDocumentPaths,
     topic: common.topic,
     deckTitle: common.deckTitle,
-    appLocale: common.appLocale
+    appLocale: common.appLocale,
+    fontSelection: common.fontSelection
   }
 }
 
@@ -151,6 +152,9 @@ export async function executeRetryFailedPages(
       styleSkillPrompt: context.styleSkill.prompt,
       appLocale: context.appLocale,
       totalPages: sessionPages.length,
+      topic: context.topic,
+      userMessage: context.userMessage,
+      fontSelection: context.fontSelection,
       emit: (chunk) => emitRetryChunk(chunk),
       runId: context.runId,
       signal: context.entry.abortController.signal
