@@ -196,6 +196,8 @@ export const zh = {
     storagePathUpdated: '存储路径已更新',
     visionModel: '视觉模型',
     visionModelHint: '用于图片解析和风格提取。未设置时使用默认模型。',
+    stylesCloudUrl: '云端风格地址',
+    stylesCloudUrlHint: '风格管理页点击「从云端同步」时拉取此地址的 JSON 文件。',
     visionModelFollowDefault: '跟随默认模型'
   },
   styles: {
@@ -208,6 +210,15 @@ export const zh = {
     refreshedDescription: '共 {count} 个风格',
     loadFailed: '风格列表加载失败',
     sourceBuiltin: '内置',
+    filterAll: '全部',
+    filterBuiltin: '内置',
+    filterCustom: '自定义',
+    filterCloud: '云端',
+    syncFromCloud: '从云端同步',
+    syncSuccess: '同步完成：新增 {added} 个，更新 {updated} 个',
+    syncNoChanges: '云端风格已是最新',
+    syncFailed: '云端同步失败',
+    cloudUrlNotSet: '未配置云端风格地址，请在设置中填写',
     pagesCount: '页面 · {count}'
   },
   styleEditor: {
@@ -245,6 +256,7 @@ export const zh = {
     filePathFailed: '请重新选择本地风格文件。',
     cannotDelete: '该风格不可删除',
     builtinCannotDelete: '内置风格请直接编辑并保存为 override',
+    deleteConfirmDescription: '确定删除「{name}」吗？此操作不可恢复。',
     deleted: '风格已删除',
     deleteFailed: '删除失败',
     name: '名称',

@@ -1,0 +1,29 @@
+[
+  {
+    "style": "aurora-borealis",
+    "styleName": "北极光",
+    "aliases": ["aurora", "极光", "北极光"],
+    "description": "极光渐变色彩，梦幻自然氛围。",
+    "category": "效果 · 戏剧",
+    "source": "cloud",
+    "styleSkill": "## 主题色\n- 主题色：标题 #1e3a5f / 正文 #2d4a6f / 强调 #06b6d4, #8b5cf6, #22d3ee\n- 背景：linear-gradient(150deg, #0c1445 0%, #1a1a4e 35%, #0d3b66 70%, #042f2e 100%)\n- 卡片：rgba(255,255,255,0.08)，边框 rgba(6,182,212,0.3)\n\n# aurora-borealis · 北极光\n\n**分类**: 效果 · 戏剧\n\n## 视觉特征\n\n- 深色底，极光绿蓝紫渐变光带\n- 半透明玻璃态卡片\n- 发光文字效果\n\n## 适用场景\n\n科技发布会、创意展示、沉浸式演讲\n\n## 布局建议\n\n- 大面积留白让渐变背景呼吸\n- 使用半透明卡片承载内容\n- 标题可以带发光效果\n\n## 动画建议\n\n`aurora-drift` / `fade-glow` / `shimmer-sweep`\n\n## 字体建议\n\n细体无衬线，现代感\n\n## 不要做\n\n不要用高饱和纯色背景覆盖极光效果"
+  },
+  {
+    "style": "terracotta-warm",
+    "styleName": "陶土暖阳",
+    "aliases": ["terracotta", "陶土", "暖阳", "赤陶"],
+    "description": "陶土色系，温暖质朴，适合文化、生活类主题。",
+    "category": "暖色 · 活力",
+    "source": "cloud",
+    "styleSkill": "## 主题色\n- 主题色：标题 #5c3a21 / 正文 #6b4c35 / 强调 #c2774e, #d4a574\n- 背景：linear-gradient(160deg, #faf5ef 0%, #f5ece3 50%, #efe4d6 100%)\n- 卡片：rgba(255,255,255,0.75)，边框 rgba(194,119,78,0.3)\n\n# terracotta-warm · 陶土暖阳\n\n**分类**: 暖色 · 活力\n\n## 视觉特征\n\n- 奶油底色，陶土/赭石色点缀\n- 圆角卡片，温暖阴影\n- 手写感装饰线条\n\n## 适用场景\n\n文化艺术、生活方式、美食旅行\n\n## 布局建议\n\n- 温暖的留白，不拥挤\n- 图片可以带圆角和暖色阴影\n- 装饰用陶土色线条和几何形状\n\n## 动画建议\n\n`fade-in` / `slide-up` / `scale-in`\n\n## 字体建议\n\n衬线体为主，搭配圆润无衬线\n\n## 不要做\n\n不要用冷色调或高对比黑白色块"
+  },
+  {
+    "style": "glass-morphism",
+    "styleName": "毛玻璃",
+    "aliases": ["glass", "毛玻璃", "glassmorphism", "磨砂"],
+    "description": "毛玻璃质感，通透层次感强，现代轻盈。",
+    "category": "效果 · 戏剧",
+    "source": "cloud",
+    "styleSkill": "## 主题色\n- 主题色：标题 #1a1a2e / 正文 #3a3a5c / 强调 #6366f1, #a78bfa\n- 背景：linear-gradient(135deg, #667eea 0%, #764ba2 30%, #f093fb 60%, #f5576c 100%)\n- 卡片：rgba(255,255,255,0.15)，border: 1px solid rgba(255,255,255,0.25)，backdrop-filter: blur(20px)\n\n# glass-morphism · 毛玻璃\n\n**分类**: 效果 · 戏剧\n\n## 视觉特征\n\n- 多彩渐变背景\n- 毛玻璃（backdrop-filter: blur）卡片\n- 半透明边框发光\n- 圆角大（16px+）\n\n## 适用场景\n\n产品展示、设计作品集、创意提案\n\n## 布局建议\n\n- 卡片必须使用 backdrop-filter: blur + 半透明白色背景\n- 背景渐变要足够丰富以展现玻璃效果\n- 文字使用白色或深色保持对比度\n\n## 动画建议\n\n`float-in` / `scale-in` / `shimmer-sweep`\n\n## 字体建议\n\n轻量无衬线，大字重标题\n\n## 不要做\n\n不要在玻璃卡片上放太多不透明色块"
+  }
+]

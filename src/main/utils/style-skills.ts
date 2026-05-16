@@ -5,7 +5,7 @@ import { is } from "@electron-toolkit/utils";
 
 // ── Types ──
 
-export type StyleSource = "builtin" | "custom" | "override";
+export type StyleSource = "builtin" | "custom" | "override" | "cloud";
 
 export interface StylePreset {
   id: string;
@@ -81,6 +81,11 @@ function normalize(input: string): string {
 
 function normalizeAlias(alias: string): string {
   return normalize(alias).replace(/\s+/g, "-");
+}
+
+function generateCustomId(): string {
+  const uid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return `custom-${uid}`;
 }
 
 function normalizeStyleId(styleId: string): string {
@@ -206,6 +211,24 @@ export async function upsertStyleSkill(input: {
   const db = getDb();
   const id = normalizeStyleId(input.id);
   const existing = db.getStyleRowSync(id);
+
+  // 编辑云端风格时，新建一条自定义记录，原云端保持不变
+  if (existing && existing.source === "cloud") {
+    const newId = generateCustomId();
+    await db.createStyleRow({
+      id: newId,
+      style: newId,
+      styleName: input.label.trim() || newId,
+      description: input.description.trim(),
+      category: (input.category || "").trim() || "自定义",
+      aliases: (input.aliases || [])
+        .map((alias) => normalizeAlias(alias))
+        .filter((alias) => alias.length > 0 && alias !== newId),
+      source: "custom",
+      styleSkill: input.prompt.trim(),
+    });
+    return { id: newId, source: "custom" };
+  }
 
   const nextSource: StyleSource = existing
     ? existing.source === "builtin"

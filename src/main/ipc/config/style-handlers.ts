@@ -45,7 +45,7 @@ export function registerStyleHandlers(ctx: IpcContext): void {
         id: string
         label: string
         description: string
-        source?: 'builtin' | 'custom' | 'override'
+        source?: 'builtin' | 'custom' | 'override' | 'cloud'
         editable?: boolean
       }>
     > = {}
@@ -235,5 +235,77 @@ export function registerStyleHandlers(ctx: IpcContext): void {
       deleted: result.deleted,
       message: result.deleted ? undefined : '内置风格不可删除'
     }
+  })
+
+  ipcMain.handle('styles:syncFromCloud', async () => {
+    log.info('[styles:syncFromCloud] requested')
+    const url = await db.getSetting<string>('styles_cloud_url')
+    if (!url || typeof url !== 'string' || !url.trim()) {
+      throw new Error('cloud_url_not_set')
+    }
+
+    const response = await fetch(url.trim(), {
+      signal: AbortSignal.timeout(15_000)
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const items = (await response.json()) as Array<{
+      style: string
+      styleName?: string
+      description?: string
+      category?: string
+      aliases?: string[]
+      styleSkill?: string
+      version?: number
+    }>
+
+    if (!Array.isArray(items)) {
+      throw new Error('invalid_format')
+    }
+
+    let added = 0
+    let updated = 0
+    let skipped = 0
+
+    for (const item of items) {
+      const styleKey = typeof item.style === 'string' ? item.style.trim() : ''
+      if (!styleKey) continue
+
+      const existing = db.getStyleRowByStyleSync(styleKey)
+
+      if (!existing) {
+        await db.createStyleRow({
+          style: styleKey,
+          styleName: item.styleName || styleKey,
+          description: item.description || '',
+          category: item.category || '',
+          aliases: item.aliases || [],
+          source: 'cloud',
+          styleSkill: item.styleSkill || ''
+        })
+        added++
+      } else if (existing.source === 'cloud') {
+        const newSkill = item.styleSkill || ''
+        if (newSkill && newSkill !== existing.styleSkill) {
+          await db.updateStyleRow(existing.id, {
+            styleName: item.styleName || existing.styleName,
+            description: item.description ?? existing.description,
+            category: item.category ?? existing.category,
+            aliases: item.aliases ?? JSON.parse(existing.aliases || '[]'),
+            styleSkill: newSkill
+          })
+          updated++
+        } else {
+          skipped++
+        }
+      } else {
+        skipped++
+      }
+    }
+
+    log.info('[styles:syncFromCloud] done', { added, updated, skipped })
+    return { success: true, added, updated, skipped }
   })
 }

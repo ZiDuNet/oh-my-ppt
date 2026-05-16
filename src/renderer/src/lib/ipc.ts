@@ -53,7 +53,7 @@ export interface StyleListItem {
   label: string
   description: string
   category: string
-  source?: 'builtin' | 'custom' | 'override'
+  source?: 'builtin' | 'custom' | 'override' | 'cloud'
   editable?: boolean
   createdAt?: number
   updatedAt?: number
@@ -392,6 +392,13 @@ export const ipc = {
       success: boolean
       deleted: boolean
       message?: string
+    }>,
+  syncStylesFromCloud: () =>
+    getIpc().invoke('styles:syncFromCloud') as Promise<{
+      success: boolean
+      added: number
+      updated: number
+      skipped: number
     }>,
   loadPreview: (htmlPath: string, sessionId?: string) =>
     getIpc().invoke('preview:load', { htmlPath, sessionId }) as Promise<string>,

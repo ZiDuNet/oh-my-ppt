@@ -7,7 +7,9 @@ import { Card, CardContent } from '../components/ui/Card'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue
 } from '../components/ui/Select'
@@ -76,7 +78,7 @@ export function HomePage(): ReactElement {
   const [pageCount, setPageCount] = useState(String(DEFAULT_PAGE_COUNT))
   const [selectedStyleId, setSelectedStyleId] = useState('')
   const [styleOptions, setStyleOptions] = useState<
-    Array<{ id: string; label: string; description: string }>
+    Array<{ id: string; label: string; description: string; category: string; source?: string }>
   >([])
   const [parsingDocument, setParsingDocument] = useState(false)
   const [importingPptx, setImportingPptx] = useState(false)
@@ -137,7 +139,9 @@ export function HomePage(): ReactElement {
         const options = sorted.map((item) => ({
           id: item.id,
           label: item.label,
-          description: item.description
+          description: item.description,
+          category: item.category,
+          source: item.source
         }))
         setStyleOptions(options)
         setSelectedStyleId((current) => {
@@ -567,18 +571,49 @@ export function HomePage(): ReactElement {
                     <SelectValue placeholder={t('home.stylePlaceholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    {styleOptions.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        <span className="flex items-baseline gap-1.5">
-                          {option.label}
-                          {option.description && (
-                            <span className="text-xs text-muted-foreground/60">
-                              {option.description}
-                            </span>
-                          )}
-                        </span>
-                      </SelectItem>
-                    ))}
+                    {(() => {
+                      const sourceGroupOrder = ["custom", "override", "builtin", "cloud"] as const
+                      const sourceGroupName = (s?: string) => {
+                        if (s === "builtin") return "内置"
+                        if (s === "cloud") return "云端"
+                        return "自定义"
+                      }
+                      const sourceBadgeCls = (s?: string) => {
+                        if (s === "builtin") return "inline-block rounded px-1 py-px text-[10px] leading-none bg-emerald-100 text-emerald-700"
+                        if (s === "cloud") return "inline-block rounded px-1 py-px text-[10px] leading-none bg-sky-100 text-sky-700"
+                        return "inline-block rounded px-1 py-px text-[10px] leading-none bg-amber-100 text-amber-700"
+                      }
+                      const groups = new Map<string, Array<(typeof styleOptions)[0]>>()
+                      for (const opt of styleOptions) {
+                        const key = sourceGroupName(opt.source)
+                        const existing = groups.get(key)
+                        if (existing) existing.push(opt)
+                        else groups.set(key, [opt])
+                      }
+                      const ordered = sourceGroupOrder
+                        .map((s) => ({ key: sourceGroupName(s), source: s }))
+                        .filter((g, i, arr) => groups.has(g.key) && arr.findIndex((x) => x.key === g.key) === i)
+                      return ordered.map((g) => (
+                        <SelectGroup key={g.key}>
+                          <SelectLabel>{g.key}</SelectLabel>
+                          {groups.get(g.key)?.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>
+                              <span className="flex items-center gap-1.5">
+                                {option.label}
+                                <span className={sourceBadgeCls(option.source)}>
+                                  {g.key}
+                                </span>
+                                {option.description && (
+                                  <span className="text-xs text-muted-foreground/50">
+                                    {option.description}
+                                  </span>
+                                )}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))
+                    })()}
                   </SelectContent>
                 </Select>
               </div>

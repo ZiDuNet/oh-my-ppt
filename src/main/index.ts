@@ -23,8 +23,8 @@ const BASE_MIN_HEIGHT = 680
 const TITLEBAR_HEIGHT = 48
 const TITLEBAR_BACKGROUND = '#f4eddf'
 const TITLEBAR_SYMBOL_COLOR = '#5d6b4d'
-const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/arcsin1/oh-my-ppt/releases/latest'
-const GITHUB_RELEASES_URL = 'https://github.com/arcsin1/oh-my-ppt/releases'
+const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/ZiDuNet/oh-my-ppt/releases/latest'
+const GITHUB_RELEASES_URL = 'https://github.com/ZiDuNet/oh-my-ppt/releases'
 
 function resolveWindowBounds(): {
   width: number

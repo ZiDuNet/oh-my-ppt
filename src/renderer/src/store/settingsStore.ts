@@ -8,6 +8,7 @@ interface Settings {
   storagePath: string
   timeouts: Record<ConfigurableModelTimeoutProfile, number>
   visionModelId: string
+  stylesCloudUrl: string
 }
 
 interface SettingsStore {
@@ -67,7 +68,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         settings: {
           ...typedSettings,
           locale,
-          visionModelId: typedSettings.visionModelId || ''
+          visionModelId: typedSettings.visionModelId || '',
+          stylesCloudUrl: typedSettings.stylesCloudUrl || ''
         },
         modelConfigs: Array.isArray(modelConfigs) ? modelConfigs : [],
         storagePathError: null,

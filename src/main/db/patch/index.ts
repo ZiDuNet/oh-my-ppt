@@ -610,6 +610,12 @@ const ensureDefaultSettings = async (client: LibSqlClient): Promise<void> => {
     sql: "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('vision_model_id', '\"\"', ?)",
     args: [now]
   })
+
+  const defaultCloudUrl = 'https://wushuo.oss-cn-beijing.aliyuncs.com/PPTStyle/pptstyles.json'
+  await client.execute({
+    sql: "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('styles_cloud_url', ?, ?)",
+    args: [JSON.stringify(defaultCloudUrl), now]
+  })
 }
 
 const resolveLegacyProjectDir = async (

@@ -65,7 +65,8 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: ZiDuNet
+  repo: oh-my-ppt
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

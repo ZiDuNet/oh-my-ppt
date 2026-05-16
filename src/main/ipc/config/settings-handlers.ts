@@ -41,7 +41,10 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       locale: settings.locale === 'en' ? 'en' : 'zh',
       storagePath,
       timeouts: readGlobalTimeouts(settings),
-      visionModelId: typeof settings.vision_model_id === 'string' ? settings.vision_model_id : ''
+      visionModelId: typeof settings.vision_model_id === 'string' ? settings.vision_model_id : '',
+      stylesCloudUrl: typeof settings.styles_cloud_url === 'string' && settings.styles_cloud_url.trim()
+        ? settings.styles_cloud_url
+        : 'https://wushuo.oss-cn-beijing.aliyuncs.com/PPTStyle/pptstyles.json'
     }
   })
 
@@ -115,6 +118,9 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     }
     if ('visionModelId' in settings) {
       await db.setSetting('vision_model_id', String(settings.visionModelId ?? ''))
+    }
+    if ('stylesCloudUrl' in settings) {
+      await db.setSetting('styles_cloud_url', String(settings.stylesCloudUrl ?? ''))
     }
     return { success: true }
   })

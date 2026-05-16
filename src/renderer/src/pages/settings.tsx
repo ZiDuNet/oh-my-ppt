@@ -93,6 +93,9 @@ export function SettingsPage(): React.JSX.Element {
   const [visionModelId, setVisionModelId] = useState(
     () => useSettingsStore.getState().settings?.visionModelId || ''
   )
+  const [stylesCloudUrl, setStylesCloudUrl] = useState(
+    () => useSettingsStore.getState().settings?.stylesCloudUrl || ''
+  )
 
   useEffect(() => {
     let active = true
@@ -103,6 +106,7 @@ export function SettingsPage(): React.JSX.Element {
       setStoragePath(nextSettings?.storagePath || '')
       setTimeoutSeconds(createTimeoutSeconds(nextSettings?.timeouts))
       setVisionModelId(nextSettings?.visionModelId || '')
+      setStylesCloudUrl(nextSettings?.stylesCloudUrl || '')
     }
     void loadSettings()
     return () => {
@@ -330,6 +334,21 @@ export function SettingsPage(): React.JSX.Element {
     }
   }
 
+  const handleStylesCloudUrlSave = async (): Promise<void> => {
+    setVerificationMessage(null)
+    try {
+      await saveSettings({ stylesCloudUrl })
+      const saveError = useSettingsStore.getState().verificationMessage
+      if (saveError) {
+        error(t('settings.saveFailed'), { description: saveError })
+        return
+      }
+      success(t('settings.saved'))
+    } catch {
+      error(t('settings.saveFailed'))
+    }
+  }
+
   const handleChoosePath = async (): Promise<void> => {
     const path = await chooseStoragePath()
     const pathError = useSettingsStore.getState().storagePathError
@@ -523,6 +542,28 @@ export function SettingsPage(): React.JSX.Element {
         </TabsContent>
 
         <TabsContent value="advanced">
+          <Card className="mb-4">
+            <CardHeader className="p-5 pb-3">
+              <CardTitle className="text-base">{t('settings.stylesCloudUrl')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 p-5 pt-0">
+              <div>
+                <div className="flex gap-2">
+                  <Input
+                    value={stylesCloudUrl}
+                    onChange={(e) => setStylesCloudUrl(e.target.value)}
+                    placeholder="https://example.com/styles.json"
+                    className="h-10 flex-1"
+                  />
+                  <Button size="sm" onClick={() => void handleStylesCloudUrlSave()}>
+                    {t('common.save')}
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{t('settings.stylesCloudUrlHint')}</p>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card className="mb-4">
             <CardHeader className="p-5 pb-3">
               <CardTitle className="text-base">{t('settings.timeoutSection')}</CardTitle>

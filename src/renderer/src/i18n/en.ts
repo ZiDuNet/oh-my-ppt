@@ -203,6 +203,8 @@ export const en = {
     storagePathUpdated: 'Storage path updated',
     visionModel: 'Vision Model',
     visionModelHint: 'Used for image parsing and style extraction. Falls back to default model when not set.',
+    stylesCloudUrl: 'Cloud Style URL',
+    stylesCloudUrlHint: 'The JSON URL fetched when clicking "Sync from Cloud" in Style Lab.',
     visionModelFollowDefault: 'Follow default model'
   },
   styles: {
@@ -216,6 +218,15 @@ export const en = {
     refreshedDescription: '{count} styles total',
     loadFailed: 'Failed to load styles',
     sourceBuiltin: 'builtin',
+    filterAll: 'All',
+    filterBuiltin: 'Built-in',
+    filterCustom: 'Custom',
+    filterCloud: 'Cloud',
+    syncFromCloud: 'Sync from Cloud',
+    syncSuccess: 'Sync complete: {added} added, {updated} updated',
+    syncNoChanges: 'Cloud styles are up to date',
+    syncFailed: 'Cloud sync failed',
+    cloudUrlNotSet: 'Cloud style URL not configured. Please set it in Settings.',
     pagesCount: 'Pages · {count}'
   },
   styleEditor: {
@@ -253,6 +264,7 @@ export const en = {
     filePathFailed: 'Please choose a local style file again.',
     cannotDelete: 'This style cannot be deleted',
     builtinCannotDelete: 'Built-in styles should be edited and saved as an override',
+    deleteConfirmDescription: 'Delete "{name}"? This action cannot be undone.',
     deleted: 'Style deleted',
     deleteFailed: 'Delete failed',
     name: 'Name',
