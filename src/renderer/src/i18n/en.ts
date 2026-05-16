@@ -109,9 +109,11 @@ export const en = {
     statusComplete: 'Complete',
     statusContinuable: 'Can continue',
     statusRegenerate: 'Regenerate needed',
+    statusGenerating: 'Generating',
     actionEnter: 'Open session',
     actionContinue: 'Continue',
     actionRegenerate: 'Regenerate',
+    actionGenerating: 'View progress',
     editTitle: 'Edit session name',
     titleEmpty: 'Name cannot be empty',
     titleTooLong: 'Name too long',
@@ -198,7 +200,10 @@ export const en = {
     verifyFailed: 'API Key verification failed',
     verifyFailedDescription: 'Check model / api_key / base_url',
     choosePathFailed: 'Failed to choose folder',
-    storagePathUpdated: 'Storage path updated'
+    storagePathUpdated: 'Storage path updated',
+    visionModel: 'Vision Model',
+    visionModelHint: 'Used for image parsing and style extraction. Falls back to default model when not set.',
+    visionModelFollowDefault: 'Follow default model'
   },
   styles: {
     eyebrow: 'Style Lab',

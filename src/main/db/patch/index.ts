@@ -605,6 +605,11 @@ const ensureDefaultSettings = async (client: LibSqlClient): Promise<void> => {
       args: [key, value, now]
     })
   }
+
+  await client.execute({
+    sql: "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('vision_model_id', '\"\"', ?)",
+    args: [now]
+  })
 }
 
 const resolveLegacyProjectDir = async (

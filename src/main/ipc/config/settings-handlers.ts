@@ -40,7 +40,8 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       theme: settings.theme || 'light',
       locale: settings.locale === 'en' ? 'en' : 'zh',
       storagePath,
-      timeouts: readGlobalTimeouts(settings)
+      timeouts: readGlobalTimeouts(settings),
+      visionModelId: typeof settings.vision_model_id === 'string' ? settings.vision_model_id : ''
     }
   })
 
@@ -111,6 +112,9 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           await db.setSetting(`timeout_ms_${profile}`, resolveModelTimeoutMs(value, profile))
         }
       }
+    }
+    if ('visionModelId' in settings) {
+      await db.setSetting('vision_model_id', String(settings.visionModelId ?? ''))
     }
     return { success: true }
   })

@@ -349,6 +349,8 @@ export function SessionDetailPage(): React.JSX.Element {
     })
   }, [id, chatType, selectedPage?.id, loadMessages, setMessages])
 
+  const chunkHandlerRef = useRef<((event: GenerateChunkEvent) => void) | null>(null)
+
   useEffect(() => {
     if (!id) return
     const handler = (event: GenerateChunkEvent): void => {
@@ -469,11 +471,43 @@ export function SessionDetailPage(): React.JSX.Element {
         }
       }
     }
+    chunkHandlerRef.current = handler
     const unsubscribe = ipc.onGenerateChunk(handler)
     return () => {
+      chunkHandlerRef.current = null
       unsubscribe?.()
     }
   }, [addMessage, id, updateProgress])
+
+  // 恢复正在进行的生成任务状态（从主进程获取快照并重放历史事件）
+  useEffect(() => {
+    if (!id) return
+    let active = true
+    ipc.getGenerateState(id)
+      .then((runState) => {
+        if (!active) return
+        if (!runState || !runState.hasActiveRun) return
+        useGenerateStore.setState({ isGenerating: true, error: null, status: 'running' })
+        if (typeof runState.totalPages === 'number' && runState.totalPages > 0) {
+          updateProgress({ totalPages: runState.totalPages })
+        }
+        if (typeof runState.progress === 'number' && runState.progress > 0) {
+          updateProgress({ progress: runState.progress })
+        }
+        if (Array.isArray(runState.events) && runState.events.length > 0) {
+          const handler = chunkHandlerRef.current
+          if (handler) {
+            for (const event of runState.events) {
+              handler(event)
+            }
+          }
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [id, updateProgress])
 
   const isSupportedImageFile = (file: File): boolean => {
     if (file.type.startsWith('image/')) return true

@@ -1369,6 +1369,16 @@ export class PPTDatabase {
     return result as unknown as ModelConfigRow | undefined
   }
 
+  async getModelConfigById(id: string): Promise<ModelConfigRow | undefined> {
+    const result = await this.db
+      .select()
+      .from(schema.modelConfigs)
+      .where(eq(schema.modelConfigs.id, id))
+      .limit(1)
+      .get()
+    return result as unknown as ModelConfigRow | undefined
+  }
+
   async upsertModelConfig(data: {
     id?: string
     name: string

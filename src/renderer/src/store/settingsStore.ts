@@ -7,6 +7,7 @@ interface Settings {
   locale: 'zh' | 'en'
   storagePath: string
   timeouts: Record<ConfigurableModelTimeoutProfile, number>
+  visionModelId: string
 }
 
 interface SettingsStore {
@@ -65,7 +66,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       set({
         settings: {
           ...typedSettings,
-          locale
+          locale,
+          visionModelId: typedSettings.visionModelId || ''
         },
         modelConfigs: Array.isArray(modelConfigs) ? modelConfigs : [],
         storagePathError: null,

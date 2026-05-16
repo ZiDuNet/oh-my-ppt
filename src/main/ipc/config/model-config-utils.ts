@@ -5,6 +5,7 @@ import {
 } from '@shared/model-timeout'
 import type { IpcContext } from '../context'
 import { readAppLocale, uiText } from '../config/locale-utils'
+import log from 'electron-log/main.js'
 
 export interface ActiveModelConfig {
   id: string
@@ -80,4 +81,33 @@ export async function resolveActiveModelConfig(
     apiKey,
     baseUrl: String(config.baseUrl || '').trim()
   }
+}
+
+export async function resolveVisionModelConfig(
+  ctx: Pick<IpcContext, 'db' | 'decryptApiKey'>
+): Promise<ActiveModelConfig> {
+  const settings = await ctx.db.getAllSettings()
+  const visionModelId = typeof settings.vision_model_id === 'string' ? settings.vision_model_id.trim() : ''
+  if (visionModelId) {
+    const config = await ctx.db.getModelConfigById(visionModelId)
+    if (config) {
+      const provider = String(config.provider || '').trim()
+      const model = String(config.model || '').trim()
+      const apiKey = ctx.decryptApiKey(config.apiKey).trim()
+      if (provider && model && apiKey) {
+        log.info('[vision-model] using dedicated vision model', { id: config.id, provider, model })
+        return {
+          id: config.id,
+          name: config.name,
+          provider,
+          model,
+          apiKey,
+          baseUrl: String(config.baseUrl || '').trim()
+        }
+      }
+      log.warn('[vision-model] vision model config incomplete, falling back to active model', { id: visionModelId })
+    }
+  }
+  log.info('[vision-model] no dedicated vision model, falling back to active model')
+  return resolveActiveModelConfig(ctx)
 }

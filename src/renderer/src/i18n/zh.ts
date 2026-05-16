@@ -103,9 +103,11 @@ export const zh = {
     statusComplete: '已完成',
     statusContinuable: '可继续生成',
     statusRegenerate: '需重新生成',
+    statusGenerating: '正在生成',
     actionEnter: '进入会话',
     actionContinue: '继续生成',
     actionRegenerate: '重新生成',
+    actionGenerating: '查看进度',
     editTitle: '编辑会话名称',
     titleEmpty: '名称不能为空',
     titleTooLong: '名称过长',
@@ -191,7 +193,10 @@ export const zh = {
     verifyFailed: 'API Key 验证失败',
     verifyFailedDescription: '请检查 model / api_key / base_url',
     choosePathFailed: '选择目录失败',
-    storagePathUpdated: '存储路径已更新'
+    storagePathUpdated: '存储路径已更新',
+    visionModel: '视觉模型',
+    visionModelHint: '用于图片解析和风格提取。未设置时使用默认模型。',
+    visionModelFollowDefault: '跟随默认模型'
   },
   styles: {
     eyebrow: 'Style Lab',

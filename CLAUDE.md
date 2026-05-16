@@ -1,25 +1,83 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project
 
 Oh My PPT — 本地优先的 AI 幻灯片生成与编辑工具。Electron + React + TypeScript。
+生成 HTML 幻灯片，支持 AI 对话修改、可视化拖拽编辑、多格式导出（PDF/PNG/PPTX）。
 
 ## Commands
 
 ```bash
-pnpm dev          # 开发
-pnpm build        # 构建
-pnpm run typecheck:node # 跑 node 类型检查
-pnpm run typecheck:web # 跑 renderer 类型检查
-pnpm typecheck    # 跑类型检查  
-pnpm lint         # 不要跑ESLint
-pnpm format       # 不要跑Prettier
+pnpm dev          # 开发模式（electron-vite dev）
+pnpm build        # 生产构建（electron-vite build）
+pnpm typecheck    # 完整类型检查（node + web）
+pnpm run typecheck:node  # 仅 main/preload 类型检查
+pnpm run typecheck:web   # 仅 renderer 类型检查
+pnpm db:generate  # Drizzle 生成 migration
+pnpm db:migrate   # Drizzle 执行 migration
 ```
+
+**注意**: 不要运行 `pnpm lint` 和 `pnpm format`。
+**注意**: 项目没有自动化测试。
 
 ## Code Style
 
 - Prettier: `singleQuote`, `no semi`, `printWidth: 100`, `trailingComma: none`
 - 路径别名: `@shared/*` → `src/shared/*`, `@renderer/*` → `src/renderer/src/*`
+- ES Module（`"type": "module"`）
+- UI 组件使用 Radix UI + Tailwind CSS + CVA
+
+## Architecture
+
+### 进程架构
+
+```
+Main Process (Node.js)  ←→  Preload  ←→  Renderer (React)
+     src/main/              src/preload/    src/renderer/src/
+```
+
+- **Main**: 业务逻辑、数据库、AI Agent、文件系统操作
+- **Renderer**: React UI、Zustand 状态管理、IPC 客户端调用
+- **Preload**: 安全桥接，暴露 `contextBridge` API
+- **Shared**: 跨进程共享的 TypeScript 类型定义
+
+### Main Process 核心模块
+
+- `ipc/context.ts` — IPC 上下文工厂，提供数据库、加密、文件操作、进度推送等依赖
+- `agent.ts` — AgentManager，管理多个并发生成会话的 Agent 生命周期和 AbortController
+- `ipc/generation/` — 生成流程编排（deck-flow、edit-flow、retry-flow、add-page-flow 等）
+- `ipc/engine/` — LLM 集成和 HTML 生成引擎
+- `tools/` — LangChain Tool 定义（页面操作、HTML 处理）
+- `prompt/` — LLM Prompt 模板
+- `db/` — Drizzle ORM + SQLite schema
+
+### Renderer Process 核心模块
+
+- `store/` — Zustand stores（sessionStore、generateStore、sessionDetailStore 等）
+- `lib/ipc.ts` — 类型安全的 IPC 客户端封装，所有主进程调用都经过这里
+- `components/` — UI 组件（layout、preview iframe、session-detail、ui）
+
+### PPT 生成流水线
+
+1. **Planning** — LLM 生成大纲（layout intent）
+2. **Design Contract** — 根据风格生成视觉系统
+3. **Page Generation** — DeepAgents 并发生成各页 HTML
+4. **Finalization** — HTML 组装、校验、写入数据库
+
+### IPC 通信模式
+
+- Renderer → Main: `ipcRenderer.invoke()` 请求/响应
+- Main → Renderer: `event.sender.send()` 推送进度（`generate:chunk`）
+- 频道命名: `session:create`, `generate:start`, `drag-editor:update-element-layout`
+
+### 数据库
+
+- Drizzle ORM + libSQL (SQLite)
+- 双表设计: `generation_pages`（生成运行时）vs `session_pages`（当前状态）
+- `session_operations` 表实现版本控制/回滚
+- API Key 使用 Electron `safeStorage` 加密存储
 
 ## Key Constraints
 
@@ -27,4 +85,4 @@ pnpm format       # 不要跑Prettier
 - **retry 模式**: 不持久化用户消息，不调用 `updateSessionStatus('active')`，userMessage 保持中英双语
 - **类型安全**: 禁止 `as any`，使用对应 flow context 类型
 - **运行态保护**: `startingSessionIds` / `beginSessionRunState` / `finalizeGenerationFailure` / `agentManager.removeSession` 不能删除
-
+- **路径安全**: 文件操作必须经过 `assertPathInAllowedRoots()` 校验

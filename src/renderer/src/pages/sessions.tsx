@@ -4,10 +4,12 @@ import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Dialog'
-import { FileText, FileUp, FolderOpen, MessageSquare, Pencil, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react'
+import { FileText, FileUp, FolderOpen, Loader2, MessageSquare, Pencil, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react'
 import { type Session, useSessionStore } from '../store'
 import { useToastStore } from '../store'
 import { getEditorGate, parseSessionMetadata } from '../lib/sessionMetadata'
+import { ipc } from '../lib/ipc'
+import type { GenerateChunkEvent } from '@shared/generation.js'
 import { useT } from '../i18n'
 import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
@@ -55,6 +57,55 @@ export function SessionsPage(): React.JSX.Element {
   useEffect(() => {
     void fetchSessions()
   }, [fetchSessions])
+
+  // 追踪正在生成的会话 ID
+  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set())
+
+  // 挂载时主动检查哪些会话有正在进行的生成任务
+  useEffect(() => {
+    const checkActive = async (): Promise<void> => {
+      const nonCompleted = sessions.filter((s) => s.status !== 'completed')
+      if (nonCompleted.length === 0) return
+      const activeIds = new Set<string>()
+      await Promise.all(
+        nonCompleted.map(async (s) => {
+          try {
+            const state = await ipc.getGenerateState(s.id)
+            if (state?.hasActiveRun) activeIds.add(s.id)
+          } catch { /* ignore */ }
+        })
+      )
+      if (activeIds.size > 0) setGeneratingIds(activeIds)
+    }
+    void checkActive()
+  }, [sessions])
+
+  // 实时追踪生成事件
+  useEffect(() => {
+    const handler = (event: GenerateChunkEvent): void => {
+      const sid = event.payload?.sessionId
+      if (!sid) return
+      if (event.type === 'run_completed' || event.type === 'run_error') {
+        setGeneratingIds((prev) => {
+          if (!prev.has(sid)) return prev
+          const next = new Set(prev)
+          next.delete(sid)
+          return next
+        })
+        // 生成结束后刷新会话列表（更新页数等信息）
+        void fetchSessions()
+      } else {
+        setGeneratingIds((prev) => {
+          if (prev.has(sid)) return prev
+          const next = new Set(prev)
+          next.add(sid)
+          return next
+        })
+      }
+    }
+    const unsubscribe = ipc.onGenerateChunk(handler)
+    return () => { unsubscribe?.() }
+  }, [])
 
   const sortedSessions = sessions
   const canEnterEditor = (session: {
@@ -157,33 +208,40 @@ export function SessionsPage(): React.JSX.Element {
             const isComplete = canEnterEditor(session)
             const editorGate = getEditorGate(session)
             const hasCompletedPages = editorGate.generatedCount > 0
-            const isContinuable = !isComplete && hasCompletedPages
-            const statusText = isComplete
-              ? t('sessions.statusComplete')
-              : isContinuable
-                ? t('sessions.statusContinuable')
-                : t('sessions.statusRegenerate')
-            const actionText = isComplete
-              ? t('sessions.actionEnter')
-              : isContinuable
-                ? t('sessions.actionContinue')
-                : t('sessions.actionRegenerate')
+            const isGenerating = generatingIds.has(session.id)
+            const isContinuable = !isComplete && hasCompletedPages && !isGenerating
+            const statusText = isGenerating
+              ? t('sessions.statusGenerating')
+              : isComplete
+                ? t('sessions.statusComplete')
+                : isContinuable
+                  ? t('sessions.statusContinuable')
+                  : t('sessions.statusRegenerate')
+            const actionText = isGenerating
+              ? t('sessions.actionGenerating')
+              : isComplete
+                ? t('sessions.actionEnter')
+                : isContinuable
+                  ? t('sessions.actionContinue')
+                  : t('sessions.actionRegenerate')
             const sourceTag = getSourceTag(session, {
               pptx: t('sessions.sourcePptx'),
               document: t('sessions.sourceDocument'),
               ai: t('sessions.sourceAi')
             })
             const SourceIcon = sourceTag.Icon
-            const statusClassName = isComplete
-              ? 'border-[#bad8b7]/80 bg-[#eef9ec] text-[#4a7a46]'
-              : isContinuable
-                ? 'border-[#d6c08d]/80 bg-[#fff3cf] text-[#7a5a19] shadow-[0_0_0_1px_rgba(214,192,141,0.14)]'
-                : 'border-[#d7b5ae]/70 bg-[#fbf1ee] text-[#93564f]'
+            const statusClassName = isGenerating
+              ? 'border-[#a8c8e6]/80 bg-[#eef4fb] text-[#3e6685]'
+              : isComplete
+                ? 'border-[#bad8b7]/80 bg-[#eef9ec] text-[#4a7a46]'
+                : isContinuable
+                  ? 'border-[#d6c08d]/80 bg-[#fff3cf] text-[#7a5a19] shadow-[0_0_0_1px_rgba(214,192,141,0.14)]'
+                  : 'border-[#d7b5ae]/70 bg-[#fbf1ee] text-[#93564f]'
             return (
               <Card
                 key={session.id}
                 className="cursor-pointer transition-all hover:translate-y-[-1px] hover:shadow-[0_14px_28px_rgba(90,72,52,0.16)]"
-                onClick={() => navigate(getSessionRoute(session))}
+                onClick={() => navigate(isGenerating ? `/sessions/${session.id}/generating` : getSessionRoute(session))}
               >
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
@@ -216,7 +274,7 @@ export function SessionsPage(): React.JSX.Element {
               <CardContent>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="soft-pill inline-flex items-center gap-1 rounded-lg px-3 py-1 text-secondary-foreground">
-                    <MessageSquare className="h-3 w-3" />
+                    {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquare className="h-3 w-3" />}
                     {actionText}
                   </span>
                   <span className={`rounded-lg border px-2 py-1 font-semibold ${statusClassName}`}>

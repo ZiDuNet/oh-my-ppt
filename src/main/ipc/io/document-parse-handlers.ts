@@ -10,7 +10,7 @@ import { extractJsonBlock, extractModelText } from '../utils'
 import type { IpcContext } from '../context'
 import type { ParseDocumentPlanPayload, ParsedDocumentPlanResult } from '@shared/generation'
 import { resolveModelTimeoutMs } from '@shared/model-timeout'
-import { resolveActiveModelConfig, resolveGlobalModelTimeouts } from '../config/model-config-utils'
+import { resolveActiveModelConfig, resolveGlobalModelTimeouts, resolveVisionModelConfig } from '../config/model-config-utils'
 import { assertImageWasRead, isImageUnsupportedError } from '../../utils/style-image-import'
 import { invokeVisionModelText } from '../../utils/vision-model'
 
@@ -919,10 +919,13 @@ export function registerDocumentParseHandlers(ctx: IpcContext): void {
     const [sourceFile] = preparedFiles
     if (!sourceFile) throw new Error('请先选择要解析的文档')
 
-    const activeModel = await resolveActiveModelConfig(ctx)
+    const isImageSource = sourceFile.type === 'image'
+    const modelConfig = isImageSource
+      ? await resolveVisionModelConfig(ctx)
+      : await resolveActiveModelConfig(ctx)
     const modelTimeouts = await resolveGlobalModelTimeouts(ctx)
-    const { provider, model, apiKey } = activeModel
-    const baseUrl = activeModel.baseUrl
+    const { provider, model, apiKey } = modelConfig
+    const baseUrl = modelConfig.baseUrl
     const modelTimeoutMs = modelTimeouts.document
 
     const topic = typeof input.topic === 'string' ? input.topic.trim() : ''

@@ -12,7 +12,7 @@ import {
   deleteStyleSkill
 } from '../../utils/style-skills'
 import type { IpcContext } from '../context'
-import { resolveActiveModelConfig, resolveGlobalModelTimeouts } from './model-config-utils'
+import { resolveActiveModelConfig, resolveGlobalModelTimeouts, resolveVisionModelConfig } from './model-config-utils'
 import { parseStyleFile } from '../../utils/style-import'
 import { parseStyleImage } from '../../utils/style-image-import'
 import { parseStylePptx } from '../../utils/style-pptx-import'
@@ -191,7 +191,7 @@ export function registerStyleHandlers(ctx: IpcContext): void {
       )
     }
 
-    const activeModel = await resolveActiveModelConfig(ctx)
+    const activeModel = await resolveVisionModelConfig(ctx)
     const modelTimeouts = await resolveGlobalModelTimeouts(ctx)
     return await parseStyleImage({
       imageBase64,

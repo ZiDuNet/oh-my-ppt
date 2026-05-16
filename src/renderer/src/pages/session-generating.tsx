@@ -13,7 +13,6 @@ import { ipc } from '@renderer/lib/ipc'
 import type { GenerateChunkEvent } from '@shared/generation.js'
 import { Button } from '../components/ui/Button'
 import { ScrollArea } from '../components/ui/ScrollArea'
-import videoSrc from '../assets/images/video.mp4'
 import dayjs from 'dayjs'
 import { getEditorGate, type EditorGate } from '../lib/sessionMetadata'
 import { useLang, type Lang } from '../i18n'
@@ -566,6 +565,28 @@ export function SessionGeneratingPage(): React.JSX.Element {
           if (shouldHydrateFromSnapshot && runState.status === 'failed' && runState.error) {
             setError(friendlyFailureMessage(runState.error, lang))
           }
+          // 立即从快照设置 stage 和 completedPageCount，避免 replay 延迟
+          if (shouldHydrateFromSnapshot && Array.isArray(runState.events)) {
+            const lastStage = [...runState.events]
+              .reverse()
+              .find((e) => typeof (e.payload as Record<string, unknown>)?.stage === 'string')
+            const stageValue = (lastStage?.payload as Record<string, unknown>)?.stage as string | undefined
+            if (stageValue) {
+              currentStageRef.current = stageValue
+              setCurrentStage(stageValue)
+            }
+            const lastPageCount = [...runState.events]
+              .reverse()
+              .find((e) => {
+                const detail = String((e.payload as Record<string, unknown>)?.detail || '')
+                return /\d+\/\d+\s*(页|pages?)/.test(detail)
+              })
+            if (lastPageCount) {
+              const detail = String((lastPageCount.payload as Record<string, unknown>)?.detail || '')
+              const match = detail.match(/(\d+)\/(\d+)\s*(页|pages?)/)
+              if (match) setCompletedPageCount(parseInt(match[1], 10))
+            }
+          }
           if (
             shouldHydrateFromSnapshot &&
             Array.isArray(runState.events) &&
@@ -658,19 +679,8 @@ export function SessionGeneratingPage(): React.JSX.Element {
 
       <div className="app-drag-region app-titlebar relative z-10 flex items-center bg-[#fff9ef]/92 backdrop-blur-sm" />
 
-      {/* ── Main content area: video background ── */}
+      {/* ── Main content area ── */}
       <div className="relative flex flex-1 overflow-hidden">
-        {/* Looping video background */}
-        <video
-          src={videoSrc}
-          controls={false}
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-
         {/* Info panel — top-left overlay */}
         <div className="app-no-drag absolute left-6 top-16 z-10 flex max-w-[460px] items-start gap-3 rounded-xl border border-[#d4d9be]/80 bg-[#fff9ef]/72 px-4 py-3 text-[#4f613f] shadow-[0_10px_22px_rgba(79,97,63,0.18)] backdrop-blur-sm">
           <button

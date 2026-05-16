@@ -90,6 +90,9 @@ export function SettingsPage(): React.JSX.Element {
   const [verifying, setVerifying] = useState(false)
   const [activatingId, setActivatingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [visionModelId, setVisionModelId] = useState(
+    () => useSettingsStore.getState().settings?.visionModelId || ''
+  )
 
   useEffect(() => {
     let active = true
@@ -99,6 +102,7 @@ export function SettingsPage(): React.JSX.Element {
       const nextSettings = useSettingsStore.getState().settings
       setStoragePath(nextSettings?.storagePath || '')
       setTimeoutSeconds(createTimeoutSeconds(nextSettings?.timeouts))
+      setVisionModelId(nextSettings?.visionModelId || '')
     }
     void loadSettings()
     return () => {
@@ -309,6 +313,23 @@ export function SettingsPage(): React.JSX.Element {
     }
   }
 
+  const handleVisionModelChange = async (id: string): Promise<void> => {
+    const value = id === '__default__' ? '' : id
+    setVisionModelId(value)
+    setVerificationMessage(null)
+    try {
+      await saveSettings({ visionModelId: value })
+      const saveError = useSettingsStore.getState().verificationMessage
+      if (saveError) {
+        error(t('settings.saveFailed'), { description: saveError })
+        return
+      }
+      success(t('settings.saved'))
+    } catch {
+      error(t('settings.saveFailed'))
+    }
+  }
+
   const handleChoosePath = async (): Promise<void> => {
     const path = await chooseStoragePath()
     const pathError = useSettingsStore.getState().storagePathError
@@ -469,6 +490,34 @@ export function SettingsPage(): React.JSX.Element {
                   </div>
                 ))
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="p-5 pb-3">
+              <CardTitle className="text-base">{t('settings.visionModel')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 p-5 pt-0">
+              <div>
+                <Select
+                  value={visionModelId || '__default__'}
+                  onValueChange={(v) => void handleVisionModelChange(v)}
+                >
+                  <SelectTrigger className="h-10">
+                    <SelectValue placeholder={t('settings.visionModelFollowDefault')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">{t('settings.visionModelFollowDefault')}</SelectItem>
+                    {modelConfigs.map((config) => (
+                      <SelectItem key={config.id} value={config.id}>
+                        {config.name}
+                        <span className="ml-2 text-xs text-muted-foreground">({config.provider})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="mt-2 text-xs text-muted-foreground">{t('settings.visionModelHint')}</p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
