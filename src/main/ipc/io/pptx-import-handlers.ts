@@ -180,6 +180,7 @@ export function registerPptxImportHandlers(ctx: IpcContext): void {
           apiKey: activeModel.apiKey,
           model: activeModel.model,
           baseUrl: activeModel.baseUrl,
+          maxTokens: activeModel.maxTokens,
           modelTimeoutMs: modelTimeouts.document
         })
 
@@ -201,10 +202,12 @@ export function registerPptxImportHandlers(ctx: IpcContext): void {
           apiKey: activeModel.apiKey,
           model: activeModel.model,
           baseUrl: activeModel.baseUrl,
+          maxTokens: activeModel.maxTokens,
           styleId,
           styleSkillPrompt: styleResult.styleSkill,
           modelTimeoutMs: modelTimeouts.document,
-          totalPages: imported.pageCount
+          totalPages: imported.pageCount,
+          topic: title
         })
         await db.updateSessionDesignContract(sessionId, designContract)
         log.info('[pptx:import] design contract generated', { sessionId })

@@ -145,6 +145,7 @@ export function registerStyleHandlers(ctx: IpcContext): void {
       apiKey: activeModel.apiKey,
       model: activeModel.model,
       baseUrl: activeModel.baseUrl,
+      maxTokens: activeModel.maxTokens,
       modelTimeoutMs: modelTimeouts.document,
       workspaceDir: styleImportDir
     })
@@ -163,6 +164,7 @@ export function registerStyleHandlers(ctx: IpcContext): void {
       apiKey: activeModel.apiKey,
       model: activeModel.model,
       baseUrl: activeModel.baseUrl,
+      maxTokens: activeModel.maxTokens,
       modelTimeoutMs: modelTimeouts.document,
       tmpRootDir
     })
@@ -200,6 +202,7 @@ export function registerStyleHandlers(ctx: IpcContext): void {
       apiKey: activeModel.apiKey,
       model: activeModel.model,
       baseUrl: activeModel.baseUrl,
+      maxTokens: activeModel.maxTokens,
       modelTimeoutMs: modelTimeouts.document
     })
   })

@@ -90,7 +90,7 @@ const resolveExportFontFace = (text: string, value: string | undefined): string 
 }
 
 const normalizeDataUriMime = (value: string): string => {
-  const match = value.match(/^data:(image\/(?:png|jpeg|jpg|gif));base64,/i)
+  const match = value.match(/^data:(image\/(?:png|jpeg|jpg|gif|svg\+xml));base64,/i)
   if (!match) return ''
   return match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase()
 }
@@ -268,6 +268,151 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       h: sizeToInY(rect.height)
     };
   };
+  const elementOrderMap = new WeakMap();
+  Array.from(pageElement.querySelectorAll('*')).forEach((element, index) => {
+    elementOrderMap.set(element, index + 1);
+  });
+  const orderFor = (element) => elementOrderMap.get(element) || 0;
+  const effectiveOpacityFor = (element) => {
+    let opacity = 1;
+    let current = element;
+    while (current && current.nodeType === Node.ELEMENT_NODE) {
+      const value = Number(window.getComputedStyle(current).opacity || '1');
+      if (Number.isFinite(value)) opacity *= Math.max(0, Math.min(1, value));
+      if (current === pageElement) break;
+      current = current.parentElement;
+    }
+    return Math.max(0, Math.min(1, opacity));
+  };
+  const extractedPaintTargets = new Map();
+  let extractedPaintTargetIndex = 0;
+  const registerPaintTarget = (element) => {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return '';
+    let id = element.getAttribute('data-pptx-paint-id');
+    if (!id) {
+      extractedPaintTargetIndex += 1;
+      id = 'pptx-paint-' + String(extractedPaintTargetIndex);
+      element.setAttribute('data-pptx-paint-id', id);
+    }
+    extractedPaintTargets.set(id, element);
+    return id;
+  };
+  const computePaintOrders = () => {
+    const entries = Array.from(extractedPaintTargets.entries())
+      .filter(([, element]) => element && element.isConnected);
+    if (entries.length === 0 || !document.elementsFromPoint) return new Map();
+    const ids = entries.map(([id]) => id);
+    const fallback = new Map(entries.map(([id, element]) => [id, orderFor(element)]));
+    const edges = new Map(ids.map((id) => [id, new Set()]));
+    const indegree = new Map(ids.map((id) => [id, 0]));
+    const addEdge = (below, above) => {
+      if (!below || !above || below === above || !edges.has(below) || !indegree.has(above)) return;
+      const set = edges.get(below);
+      if (set.has(above)) return;
+      set.add(above);
+      indegree.set(above, (indegree.get(above) || 0) + 1);
+    };
+    const resolvePaintId = (node) => {
+      let current = node;
+      while (current && current !== document && current !== document.documentElement) {
+        const id = current.getAttribute?.('data-pptx-paint-id') || '';
+        if (id && extractedPaintTargets.has(id)) return id;
+        current = current.parentElement;
+      }
+      return '';
+    };
+    const uniqueStackIdsAt = (x, y) => {
+      const seen = new Set();
+      const ordered = [];
+      for (const node of document.elementsFromPoint(x, y)) {
+        const id = resolvePaintId(node);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        ordered.push(id);
+      }
+      return ordered;
+    };
+    const samplePoints = (rect) => {
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(window.innerWidth, rect.right);
+      const bottom = Math.min(window.innerHeight, rect.bottom);
+      if (right <= left || bottom <= top) return [];
+      const x1 = left + (right - left) * 0.25;
+      const x2 = left + (right - left) * 0.5;
+      const x3 = left + (right - left) * 0.75;
+      const y1 = top + (bottom - top) * 0.25;
+      const y2 = top + (bottom - top) * 0.5;
+      const y3 = top + (bottom - top) * 0.75;
+      return [
+        [x2, y2],
+        [x1, y1],
+        [x3, y1],
+        [x1, y3],
+        [x3, y3],
+        [x2, y1],
+        [x2, y3],
+        [x1, y2],
+        [x3, y2]
+      ];
+    };
+
+    const pointerStyle = document.createElement('style');
+    pointerStyle.id = 'ohmyppt-paint-order-pointer-events';
+    pointerStyle.textContent = '[data-pptx-paint-id] { pointer-events: auto !important; }';
+    document.head.appendChild(pointerStyle);
+    try {
+      for (const [, element] of entries) {
+        const rect = element.getBoundingClientRect();
+        for (const [x, y] of samplePoints(rect)) {
+          const stack = uniqueStackIdsAt(x, y);
+          for (let topIndex = 0; topIndex < stack.length; topIndex += 1) {
+            for (let lowerIndex = topIndex + 1; lowerIndex < stack.length; lowerIndex += 1) {
+              addEdge(stack[lowerIndex], stack[topIndex]);
+            }
+          }
+        }
+      }
+    } finally {
+      pointerStyle.remove();
+    }
+
+    const byFallback = (left, right) => (fallback.get(left) || 0) - (fallback.get(right) || 0);
+    const queue = ids.filter((id) => (indegree.get(id) || 0) === 0).sort(byFallback);
+    const result = new Map();
+    let rank = 1;
+    while (queue.length > 0) {
+      const id = queue.shift();
+      if (!id || result.has(id)) continue;
+      result.set(id, rank);
+      rank += 1;
+      for (const above of edges.get(id) || []) {
+        indegree.set(above, Math.max(0, (indegree.get(above) || 0) - 1));
+        if ((indegree.get(above) || 0) === 0) {
+          queue.push(above);
+          queue.sort(byFallback);
+        }
+      }
+    }
+    ids
+      .filter((id) => !result.has(id))
+      .sort(byFallback)
+      .forEach((id) => {
+        result.set(id, rank);
+        rank += 1;
+      });
+    return result;
+  };
+  const applyPaintOrders = (items) => {
+    const paintOrders = computePaintOrders();
+    items.forEach((item) => {
+      if (!item || !item.paintId) return;
+      if (paintOrders.has(item.paintId)) {
+        item.order = paintOrders.get(item.paintId);
+      }
+      delete item.paintId;
+    });
+  };
 
   // ========== Shapes: skip consumed table elements ==========
   const shapeNodes = Array.from(pageElement.querySelectorAll('section,main,article,header,footer,aside,div,figure,figcaption,table,td,th'));
@@ -337,6 +482,8 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       y,
       w,
       h,
+      order: orderFor(element),
+      paintId: registerPaintTarget(element),
       fill,
       transparency: fill ? transparencyFor(style.backgroundColor, opacity) : 100,
       radius,
@@ -525,6 +672,8 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
         : 'left',
       opacity: textPaint.opacity,
       rotate: parseRotate(parentStyle),
+      order: orderFor(parentElement),
+      paintId: registerPaintTarget(parentElement),
       lineSpacing: parentStyle.lineHeight && parentStyle.lineHeight !== 'normal'
         ? Math.max(fontSizePt * 1.08, (Number.parseFloat(parentStyle.lineHeight) || 0) * pointsPerPx)
         : isVerticalText
@@ -719,9 +868,49 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       }
     }
   };
+  const svgToDataUri = (svg) => {
+    try {
+      const clone = svg.cloneNode(true);
+      const inlinePaint = (source, target) => {
+        if (!source || !target || source.nodeType !== Node.ELEMENT_NODE || target.nodeType !== Node.ELEMENT_NODE) return;
+        const computed = window.getComputedStyle(source);
+        const color = computed.color || '';
+        if (color && (!target.getAttribute('color') || target.getAttribute('color') === 'currentColor')) {
+          target.setAttribute('color', color);
+        }
+        ['fill', 'stroke'].forEach((attr) => {
+          const raw = target.getAttribute(attr);
+          const computedValue = computed[attr] || '';
+          if ((!raw || raw === 'currentColor') && computedValue && computedValue !== 'none') {
+            target.setAttribute(attr, computedValue);
+          } else if (raw === 'currentColor' && color) {
+            target.setAttribute(attr, color);
+          }
+        });
+        const sourceChildren = Array.from(source.children || []);
+        const targetChildren = Array.from(target.children || []);
+        targetChildren.forEach((child, index) => inlinePaint(sourceChildren[index], child));
+      };
+      inlinePaint(svg, clone);
+      if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      if (!clone.getAttribute('viewBox') && svg.getBBox) {
+        try {
+          const box = svg.getBBox();
+          if (box && box.width > 0 && box.height > 0) {
+            clone.setAttribute('viewBox', [box.x, box.y, box.width, box.height].join(' '));
+          }
+        } catch (_err) {}
+      }
+      const xml = new XMLSerializer().serializeToString(clone);
+      const base64 = btoa(unescape(encodeURIComponent(xml)));
+      return 'data:image/svg+xml;base64,' + base64;
+    } catch {
+      return '';
+    }
+  };
 
   const images = [];
-  const imageNodes = Array.from(pageElement.querySelectorAll('img,canvas'));
+  const imageNodes = Array.from(pageElement.querySelectorAll('img,canvas,svg'));
   for (const element of imageNodes) {
     if (images.length >= maxImages) break;
     const style = window.getComputedStyle(element);
@@ -730,16 +919,25 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     // Skip decorative blurred/transparent images (blur blobs, faint SVGs)
     if (/blur/i.test(style.filter || '')) continue;
     if (Number(style.opacity || '1') < 0.15) continue;
-    const dataUri = element.tagName === 'CANVAS' ? canvasToDataUri(element) : await imageToDataUri(element);
-    if (!/^data:image\\/(?:png|jpeg|jpg|gif);base64,/i.test(dataUri)) continue;
+    const tagName = String(element.tagName || '').toUpperCase();
+    const dataUri =
+      tagName === 'CANVAS'
+        ? canvasToDataUri(element)
+        : tagName === 'SVG'
+          ? svgToDataUri(element)
+          : await imageToDataUri(element);
+    if (!/^data:image\\/(?:png|jpeg|jpg|gif|svg\\+xml);base64,/i.test(dataUri)) continue;
     if (maxImageDataUriLength > 128 && dataUri.length > maxImageDataUriLength) continue;
     images.push({
       dataUri,
-      mimeType: dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif));base64,/i)?.[1] || 'image/png',
+      mimeType: dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif|svg\\+xml));base64,/i)?.[1] || 'image/png',
       x,
       y,
       w,
       h,
+      order: orderFor(element),
+      paintId: registerPaintTarget(element),
+      opacity: effectiveOpacityFor(element),
       alt: element.getAttribute('alt') || '',
       rotate: parseRotate(style)
     });
@@ -769,7 +967,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     )
     if (!bgMatch) continue
     const dataUri = bgMatch[1]
-    if (!/^data:image\\/(?:png|jpeg|jpg|gif);base64,/i.test(dataUri)) continue
+    if (!/^data:image\\/(?:png|jpeg|jpg|gif|svg\\+xml);base64,/i.test(dataUri)) continue
     if (maxImageDataUriLength > 128 && dataUri.length > maxImageDataUriLength) continue
     if (seenDataUris.has(dataUri)) continue
     seenDataUris.add(dataUri)
@@ -777,16 +975,21 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     images.push({
       dataUri,
       mimeType:
-        dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif));base64,/i)?.[1] || 'image/png',
+        dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif|svg\\+xml));base64,/i)?.[1] || 'image/png',
       x,
       y,
       w,
       h,
+      order: orderFor(el),
+      paintId: registerPaintTarget(el),
+      opacity: effectiveOpacityFor(el),
       alt: '',
       rotate: parseRotate(style)
     })
     el.setAttribute('data-pptx-extracted-image', '1');
   }
+
+  applyPaintOrders([...shapes, ...texts, ...images]);
 
   return { backgroundColor, shapes, texts, images, tables };
 })()
@@ -858,6 +1061,7 @@ const normalizeTable = (raw: unknown): HtmlToPptxTable | null => {
     y: clamp(Number(row.y) || 0, 0, DEFAULT_SLIDE_HEIGHT),
     w: clamp(Number(row.w) || 0.1, 0.1, DEFAULT_SLIDE_WIDTH),
     h: clamp(Number(row.h) || 0.1, 0.1, DEFAULT_SLIDE_HEIGHT),
+    order: Number.isFinite(Number(row.order)) ? Math.max(0, Number(row.order)) : undefined,
     colWidths: colWidthsRaw.map((w) => Math.max(0.05, Number(w) || 0.05)),
     rowHeights: rowHeightsRaw.map((h) => Math.max(0.03, Number(h) || 0.03)),
     rows
@@ -902,7 +1106,8 @@ export const normalizeExtractedHtmlToPptxSlide = (
         charSpacing: Number.isFinite(Number(row.charSpacing))
           ? clamp(Number(row.charSpacing), -20, 200)
           : undefined,
-        wrap: Boolean(row.wrap)
+        wrap: Boolean(row.wrap),
+        order: Number.isFinite(Number(row.order)) ? Math.max(0, Number(row.order)) : undefined
       }
     })
     .filter((item): item is HtmlToPptxTextBox => Boolean(item))
@@ -935,7 +1140,8 @@ export const normalizeExtractedHtmlToPptxSlide = (
           : undefined,
         shapeType:
           row.shapeType === 'ellipse' || row.shapeType === 'roundRect' ? row.shapeType : 'rect',
-        rotate: clamp(Number(row.rotate ?? 0), -360, 360)
+        rotate: clamp(Number(row.rotate ?? 0), -360, 360),
+        order: Number.isFinite(Number(row.order)) ? Math.max(0, Number(row.order)) : undefined
       }
     })
     .filter((item): item is HtmlToPptxShape => Boolean(item))
@@ -954,7 +1160,9 @@ export const normalizeExtractedHtmlToPptxSlide = (
         w: clamp(Number(row.w) || 0.1, 0.05, DEFAULT_SLIDE_WIDTH),
         h: clamp(Number(row.h) || 0.1, 0.05, DEFAULT_SLIDE_HEIGHT),
         alt: normalizeText(String(row.alt || '')),
-        rotate: clamp(Number(row.rotate ?? 0), -360, 360)
+        rotate: clamp(Number(row.rotate ?? 0), -360, 360),
+        opacity: clamp(Number(row.opacity ?? 1), 0, 1),
+        order: Number.isFinite(Number(row.order)) ? Math.max(0, Number(row.order)) : undefined
       }
     })
     .filter((item): item is HtmlToPptxImage => Boolean(item))

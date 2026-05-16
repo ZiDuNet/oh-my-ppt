@@ -56,6 +56,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       model: config.model,
       apiKey: decryptApiKey(config.apiKey),
       baseUrl: config.baseUrl,
+      maxTokens: config.maxTokens || 4096,
       active: config.active === 1,
       createdAt: config.createdAt,
       updatedAt: config.updatedAt
@@ -139,6 +140,10 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     if (!name) throw new Error(uiText(locale, '请填写模型名称。', 'Enter model name.'))
     if (!model) throw new Error(uiText(locale, '请填写 model。', 'Enter model.'))
     if (!apiKey) throw new Error(uiText(locale, '请填写 api_key。', 'Enter api_key.'))
+    const maxTokens =
+      typeof record.maxTokens === 'number' && record.maxTokens > 0
+        ? Math.min(record.maxTokens, 16384)
+        : 4096
     const savedId = await db.upsertModelConfig({
       id,
       name,
@@ -146,6 +151,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       model,
       apiKey: encryptApiKey(apiKey),
       baseUrl,
+      maxTokens,
       active: record.active === true
     })
     return { success: true, id: savedId }
@@ -186,14 +192,17 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(
     'settings:verifyApiKey',
-    async (_event, { provider, apiKey, model, baseUrl, timeoutMs }) => {
+    async (_event, { provider, apiKey, model, baseUrl, maxTokens, timeoutMs }) => {
       const locale = await readAppLocale(ctx)
       const resolvedTimeoutMs = resolveModelTimeoutMs(timeoutMs, 'verify')
+      const resolvedMaxTokens =
+        typeof maxTokens === 'number' && maxTokens > 0 ? Math.min(maxTokens, 16384) : 4096
       log.info('[settings:verifyApiKey] received', {
         provider,
         model,
         hasApiKey: typeof apiKey === 'string' && apiKey.trim().length > 0,
         baseUrl: typeof baseUrl === 'string' ? baseUrl : '',
+        maxTokens: resolvedMaxTokens,
         timeoutMs: resolvedTimeoutMs
       })
 
@@ -212,7 +221,9 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           provider,
           apiKey.trim(),
           model.trim(),
-          typeof baseUrl === 'string' ? baseUrl.trim() : ''
+          typeof baseUrl === 'string' ? baseUrl.trim() : '',
+          undefined,
+          resolvedMaxTokens
         )
         await client.invoke('Reply with OK.', {
           signal: AbortSignal.timeout(resolvedTimeoutMs)

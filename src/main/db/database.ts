@@ -187,6 +187,7 @@ export interface ModelConfigRow {
   model: string
   apiKey: string
   baseUrl: string
+  maxTokens: number
   active: number
   createdAt: number
   updatedAt: number
@@ -1386,10 +1387,12 @@ export class PPTDatabase {
     model: string
     apiKey: string
     baseUrl: string
+    maxTokens?: number
     active?: boolean
   }): Promise<string> {
     const id = data.id || crypto.randomUUID()
     const now = Math.floor(Date.now() / 1000)
+    const maxTokens = data.maxTokens || 4096
     if (data.active) {
       await this.db
         .update(schema.modelConfigs)
@@ -1406,6 +1409,7 @@ export class PPTDatabase {
         model: data.model,
         apiKey: data.apiKey,
         baseUrl: data.baseUrl,
+        maxTokens,
         active: data.active ? 1 : 0,
         createdAt: now,
         updatedAt: now
@@ -1418,6 +1422,7 @@ export class PPTDatabase {
           model: data.model,
           apiKey: data.apiKey,
           baseUrl: data.baseUrl,
+          maxTokens,
           active: data.active ? 1 : 0,
           updatedAt: now
         }

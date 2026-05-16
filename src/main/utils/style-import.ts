@@ -32,6 +32,7 @@ export async function parseStyleFile(args: {
   apiKey: string
   model: string
   baseUrl: string
+  maxTokens?: number
   modelTimeoutMs: number
   workspaceDir: string
 }): Promise<StyleParseResult> {
@@ -42,6 +43,7 @@ export async function parseStyleFile(args: {
     apiKey: args.apiKey,
     model: args.model,
     baseUrl: args.baseUrl,
+    maxTokens: args.maxTokens,
     modelTimeoutMs: args.modelTimeoutMs,
     workspaceDir: args.workspaceDir,
     file: sourceFile
@@ -89,11 +91,12 @@ async function runStyleImportAgent(args: {
   apiKey: string
   model: string
   baseUrl: string
+  maxTokens?: number
   modelTimeoutMs: number
   workspaceDir: string
   file: PreparedStyleSourceFile
 }): Promise<string> {
-  const model = resolveModel(args.provider, args.apiKey, args.model, args.baseUrl, 0.2)
+  const model = resolveModel(args.provider, args.apiKey, args.model, args.baseUrl, 0.2, args.maxTokens)
   const prompt = buildStyleImportPrompt(args.file.virtualPath)
   log.info('[styles:parseFile] agent read_file requested', {
     virtualPath: args.file.virtualPath,

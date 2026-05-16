@@ -31,6 +31,7 @@ export interface HtmlToPptxTextBox {
   charSpacing?: number
   wrap?: boolean
   runs?: HtmlToPptxTextRun[]
+  order?: number
 }
 
 export type HtmlToPptxShapeType = 'rect' | 'roundRect' | 'ellipse'
@@ -53,6 +54,7 @@ export interface HtmlToPptxShape {
   border?: HtmlToPptxBorder
   shapeType?: HtmlToPptxShapeType
   rotate?: number
+  order?: number
 }
 
 export interface HtmlToPptxImage {
@@ -64,6 +66,8 @@ export interface HtmlToPptxImage {
   h: number
   alt?: string
   rotate?: number
+  opacity?: number
+  order?: number
 }
 
 export interface HtmlToPptxTableCell {
@@ -96,6 +100,7 @@ export interface HtmlToPptxTable {
   colWidths: number[]
   rowHeights: number[]
   rows: HtmlToPptxTableCell[][]
+  order?: number
 }
 
 export interface HtmlToPptxSlide {

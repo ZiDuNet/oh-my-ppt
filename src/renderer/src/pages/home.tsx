@@ -18,7 +18,8 @@ import { CircleAlert, FileText, FileUp, Loader2, Sparkles } from 'lucide-react'
 import { useSessionStore } from '../store'
 import { useSettingsStore } from '../store'
 import { useToastStore } from '../store'
-import { ipc, type StyleParseResult } from '@renderer/lib/ipc'
+import { ipc, type FontListItem, type StyleParseResult } from '@renderer/lib/ipc'
+import type { FontSelection } from '@shared/generation'
 import { useT } from '../i18n'
 import {
   isSupportedImageMimeType,
@@ -77,8 +78,12 @@ export function HomePage(): ReactElement {
   const [brief, setBrief] = useState('')
   const [pageCount, setPageCount] = useState(String(DEFAULT_PAGE_COUNT))
   const [selectedStyleId, setSelectedStyleId] = useState('')
+  const [selectedFontPair, setSelectedFontPair] = useState('auto')
   const [styleOptions, setStyleOptions] = useState<
     Array<{ id: string; label: string; description: string; category: string; source?: string }>
+  >([])
+  const [fontOptions, setFontOptions] = useState<
+    Array<{ id: string; title: FontListItem; body: FontListItem }>
   >([])
   const [parsingDocument, setParsingDocument] = useState(false)
   const [importingPptx, setImportingPptx] = useState(false)
@@ -160,9 +165,64 @@ export function HomePage(): ReactElement {
     [error, t]
   )
 
+  const loadFontOptions = useCallback(async (): Promise<void> => {
+    try {
+      const { googleFonts, userFonts } = await ipc.listFonts()
+      const byFamily = new Map<string, FontListItem>()
+      for (const font of [...googleFonts, ...userFonts]) {
+        byFamily.set(font.family, font)
+      }
+      const buildPair = (titleFamily: string, bodyFamily: string): {
+        id: string
+        title: FontListItem
+        body: FontListItem
+      } | null => {
+        const title = byFamily.get(titleFamily)
+        const body = byFamily.get(bodyFamily)
+        if (!title || !body) return null
+        return {
+          id: `${title.source}:${title.id}|${body.source}:${body.id}`,
+          title,
+          body
+        }
+      }
+      const curated = [
+        // 拉丁：现代无衬线
+        buildPair('Montserrat', 'Inter'),
+        buildPair('Montserrat', 'Poppins'),
+        buildPair('Space Grotesk', 'Inter'),
+        // 拉丁：衬线搭配
+        buildPair('Playfair Display', 'Inter'),
+        buildPair('Merriweather', 'Poppins'),
+        // 拉丁：展示/手写 + 正文
+        buildPair('Bebas Neue', 'Inter'),
+        buildPair('Caveat', 'Inter'),
+        buildPair('Dancing Script', 'Poppins'),
+        // 拉丁：等宽
+        buildPair('Fira Code', 'Inter'),
+        // 中文
+        buildPair('Noto Serif SC', 'Noto Sans SC'),
+        buildPair('ZCOOL XiaoWei', 'Noto Sans SC'),
+        buildPair('Ma Shan Zheng', 'Noto Sans SC')
+      ].filter((item): item is NonNullable<typeof item> => Boolean(item))
+      const uploaded = userFonts.map((font) => ({
+        id: `${font.source}:${font.id}|${font.source}:${font.id}`,
+        title: font,
+        body: font
+      }))
+      setFontOptions([...uploaded, ...curated])
+    } catch {
+      setFontOptions([])
+    }
+  }, [])
+
   useEffect(() => {
     void loadStyleOptions()
   }, [loadStyleOptions])
+
+  useEffect(() => {
+    void loadFontOptions()
+  }, [loadFontOptions])
 
   const handleSubmit = async (): Promise<void> => {
     const validationError = validateForm()
@@ -181,6 +241,22 @@ export function HomePage(): ReactElement {
       return
     }
     const selectedStyle = styleOptions.find((option) => option.id === selectedStyleId)!
+    const selectedFontOption = fontOptions.find((option) => option.id === selectedFontPair)
+    const fontSelection: FontSelection = selectedFontOption
+      ? {
+          mode: 'pair',
+          title: {
+            source: selectedFontOption.title.source,
+            family: selectedFontOption.title.family,
+            id: selectedFontOption.title.id
+          },
+          body: {
+            source: selectedFontOption.body.source,
+            family: selectedFontOption.body.family,
+            id: selectedFontOption.body.id
+          }
+        }
+      : { mode: 'auto' }
     const topicText = topic.trim()
     const briefText = brief.trim()
     const safePageCount = Number.parseInt(pageCount.trim(), 10)
@@ -197,7 +273,8 @@ export function HomePage(): ReactElement {
         topic: topicText,
         styleId: selectedStyleId,
         pageCount: safePageCount,
-        referenceDocumentPath: referenceDocumentPath || undefined
+        referenceDocumentPath: referenceDocumentPath || undefined,
+        fontSelection
       })
       success(t('home.sessionCreated'), {
         description: t('home.generationStarted'),
@@ -552,9 +629,9 @@ export function HomePage(): ReactElement {
         )}
 
         <Card className="mb-4">
-          <CardContent className="space-y-4 py-5">
+          <CardContent className="space-y-3 py-4 [&_input]:h-9 [&_button]:h-9 [&_label]:mb-1.5 [&_label]:text-xs">
             <div>
-              <label className="mb-2 block text-sm font-medium">{t('home.topic')}</label>
+              <label className="block font-medium">{t('home.topic')}</label>
               <Input
                 placeholder={t('home.topicPlaceholder')}
                 value={topic}
@@ -563,9 +640,9 @@ export function HomePage(): ReactElement {
               />
             </div>
 
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_160px]">
+            <div className="grid gap-3 md:grid-cols-[1fr_100px]">
               <div>
-                <label className="mb-2 block text-sm font-medium">{t('home.style')}</label>
+                <label className="block font-medium">{t('home.style')}</label>
                 <Select value={selectedStyleId} onValueChange={setSelectedStyleId}>
                   <SelectTrigger>
                     <SelectValue placeholder={t('home.stylePlaceholder')} />
@@ -619,7 +696,7 @@ export function HomePage(): ReactElement {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-medium">{t('home.pageCount')}</label>
+                <label className="block font-medium">{t('home.pageCount')}</label>
                 <Input
                   type="text"
                   inputMode="numeric"
@@ -644,14 +721,55 @@ export function HomePage(): ReactElement {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">{t('home.brief')}</label>
+              <label className="block font-medium">{t('home.fontScheme')}</label>
+              <Select value={selectedFontPair} onValueChange={setSelectedFontPair}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('home.fontSchemeAuto')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">{t('home.fontSchemeAuto')}</SelectItem>
+                  {fontOptions.map((option) => {
+                    const same = option.title.family === option.body.family
+                    const isUploaded = option.title.source === 'uploaded'
+                    const sourceLabel = isUploaded
+                      ? t('home.fontSourceUploaded')
+                      : t('home.fontSourceBuiltIn')
+                    const label = same
+                      ? `${option.title.family} ${t('home.fontPairBoth')}`
+                      : `${option.title.family} ${t('home.fontPairTitle')} · ${option.body.family} ${t('home.fontPairBody')}`
+                    return (
+                      <SelectItem key={option.id} value={option.id}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={`shrink-0 rounded px-1 py-0.5 text-[10px] font-medium ${
+                              isUploaded
+                                ? 'bg-[#eef9ec] text-[#4a7a46]'
+                                : 'bg-[#eef6ff] text-[#3e6685]'
+                            }`}
+                          >
+                            {sourceLabel}
+                          </span>
+                          <span className="truncate">{label}</span>
+                        </span>
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {selectedFontPair === 'auto' ? t('home.fontSchemeAutoHint') : t('home.fontSchemeManualHint')}
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-medium">{t('home.brief')}</label>
               <Textarea
                 placeholder={t('home.briefPlaceholder')}
-                rows={5}
+                rows={4}
                 value={brief}
                 required
                 onChange={(e) => setBrief(e.target.value)}
-                className="min-h-[132px] resize-y"
+                className="min-h-[100px] resize-y"
               />
             </div>
           </CardContent>

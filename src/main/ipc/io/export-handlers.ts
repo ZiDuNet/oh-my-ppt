@@ -37,6 +37,17 @@ const parseImageOnly = (payload: unknown): boolean =>
 const sanitizeExportBaseName = (value: string, fallback: string): string =>
   value.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || fallback
 
+const isSameOrChildPath = async (candidatePath: string, parentPath: string): Promise<boolean> => {
+  const resolveRealPath = async (value: string): Promise<string> =>
+    fs.promises.realpath(value).catch(() => path.resolve(value))
+
+  const candidate = path.resolve(await resolveRealPath(candidatePath))
+  const parent = path.resolve(await resolveRealPath(parentPath))
+  const relative = path.relative(parent, candidate)
+
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
 const buildPngFileName = (pageNumber: number, title: string | undefined): string => {
   const paddedNumber = String(pageNumber).padStart(2, '0')
   const sanitizedTitle = sanitizeExportBaseName(String(title || '').trim(), `page-${paddedNumber}`)
@@ -71,7 +82,7 @@ export function registerExportHandlers(ctx: IpcContext): void {
       BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
     const saveResult = await dialog.showSaveDialog(ownerWindow, {
       title: '导出 PDF',
-      defaultPath: path.join(projectDir, `${sanitizedBaseName}.pdf`),
+      defaultPath: path.join(path.dirname(projectDir), `${sanitizedBaseName}.pdf`),
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -144,27 +155,23 @@ export function registerExportHandlers(ctx: IpcContext): void {
       throw new Error('sessionId 不能为空')
     }
 
-    const { session, pages, projectDir } = await resolveSessionPageFiles(sessionId)
-    const sessionTitle =
-      typeof session.title === 'string' && session.title.trim().length > 0
-        ? session.title.trim()
-        : `ohmyppt-${sessionId}`
-    const sanitizedBaseName = sanitizeExportBaseName(sessionTitle, `ohmyppt-${sessionId}`)
+    const { pages, projectDir } = await resolveSessionPageFiles(sessionId)
 
     const ownerWindow =
       BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
     const directoryResult = await dialog.showOpenDialog(ownerWindow, {
-      title: '导出 PNG 图片',
-      defaultPath: path.join(projectDir, `${sanitizedBaseName}-png`),
-      buttonLabel: '导出到此文件夹',
-      properties: ['openDirectory', 'createDirectory', 'promptToCreate']
+      title: '选择 PNG 导出目录',
+      defaultPath: path.dirname(projectDir),
+      buttonLabel: '导出到此目录',
+      properties: ['openDirectory', 'createDirectory']
     })
 
     if (directoryResult.canceled || directoryResult.filePaths.length === 0) {
       return { success: false, cancelled: true }
     }
 
-    const outputDir = directoryResult.filePaths[0]
+    const outputParentDir = directoryResult.filePaths[0]
+    const outputDir = path.join(outputParentDir, `ohmyppt-export-image_${nanoid(8)}`)
     const warnings: string[] = []
 
     try {
@@ -239,7 +246,7 @@ export function registerExportHandlers(ctx: IpcContext): void {
       BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
     const saveResult = await dialog.showSaveDialog(ownerWindow, {
       title: '导出 PPTX',
-      defaultPath: path.join(projectDir, `${sanitizedBaseName}.pptx`),
+      defaultPath: path.join(path.dirname(projectDir), `${sanitizedBaseName}.pptx`),
       filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -320,7 +327,7 @@ export function registerExportHandlers(ctx: IpcContext): void {
   })
 
   // Export: slide-pack (standalone executable with embedded slides)
-  ipcMain.handle('export:slidePack', async (_event, payload: unknown) => {
+  ipcMain.handle('export:slidePack', async (event, payload: unknown) => {
     const sessionId = parseSessionId(payload)
     if (!sessionId) throw new Error('Missing sessionId')
 
@@ -333,17 +340,23 @@ export function registerExportHandlers(ctx: IpcContext): void {
         : path.join(process.resourcesPath, 'app.asar.unpacked', 'resources')
 
       const targets = [
-        { platform: 'macos-arm64', bin: 'slide-pack-darwin-arm64', ext: '' },
-        { platform: 'macos-amd64', bin: 'slide-pack-darwin-amd64', ext: '' },
-        { platform: 'windows-amd64', bin: 'slide-pack-windows-amd64.exe', ext: '.exe' }
+        { platform: 'macos-arm64', bin: 'slide-pack-darwin-arm64', ext: '', os: 'darwin', arch: 'arm64' },
+        { platform: 'macos-amd64', bin: 'slide-pack-darwin-amd64', ext: '', os: 'darwin', arch: 'x64' },
+        { platform: 'windows-amd64', bin: 'slide-pack-windows-amd64.exe', ext: '.exe', os: 'win32', arch: 'x64' }
       ]
+
+      const currentPlatform = process.platform
+      const currentArch = process.arch
 
       const rawTitle = typeof session.title === 'string' && session.title.trim() ? session.title.trim() : 'slides'
       const sessionName = rawTitle.replace(/[<>:"/\\|?*]/g, '').trim()
 
       // Let user choose save directory
-      const saveResult = await dialog.showOpenDialog({
+      const ownerWindow =
+        BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
+      const saveResult = await dialog.showOpenDialog(ownerWindow, {
         title: '选择打包导出目录',
+        defaultPath: path.dirname(projectDir),
         properties: ['openDirectory', 'createDirectory'],
         buttonLabel: '导出到此目录'
       })
@@ -351,8 +364,13 @@ export function registerExportHandlers(ctx: IpcContext): void {
         return { success: false, cancelled: true }
       }
 
+      const outputParentDir = saveResult.filePaths[0]
+      if (await isSameOrChildPath(outputParentDir, projectDir)) {
+        throw new Error('打包导出目录不能选择当前会话目录或其子目录，请选择会话目录外的位置。')
+      }
+
       // Create output folder
-      const outputFolder = path.join(saveResult.filePaths[0], `ohmyppt-${nanoid(8)}`)
+      const outputFolder = path.join(outputParentDir, `ohmyppt-${nanoid(8)}`)
       fs.mkdirSync(outputFolder, { recursive: true })
 
       log.info('[export:slidePack] starting', { sessionId, projectDir, outputFolder })
@@ -388,16 +406,30 @@ export function registerExportHandlers(ctx: IpcContext): void {
 
         const viewerData = fs.readFileSync(viewerPath)
         const outputName = `${sessionName}-${t.platform}${t.ext}`
-        const outputPath = path.join(outputFolder, outputName)
 
         // Trailer: uint64 LE = ZIP data length
         const trailer = Buffer.alloc(8)
         trailer.writeBigUInt64LE(BigInt(zipData.byteLength))
 
         const output = Buffer.concat([viewerData, Buffer.from(zipData), trailer])
-        fs.writeFileSync(outputPath, output)
-        fs.chmodSync(outputPath, 0o755)
-        generatedFiles.push(outputName)
+
+        // For cross-platform darwin binaries: wrap in a zip with Unix permissions
+        // so macOS can execute after extracting (Windows chmod is a no-op for Unix perms)
+        const isCrossPlatform = t.os !== currentPlatform || t.arch !== currentArch
+        if (isCrossPlatform && t.os === 'darwin') {
+          const innerName = `${sessionName}-${t.platform}`
+          const permissionZip = zipSync(
+            { [innerName]: [new Uint8Array(output), { os: 3, attrs: 0o755 << 16 }] as any }
+          )
+          const zipOutputName = `${sessionName}-${t.platform}.zip`
+          fs.writeFileSync(path.join(outputFolder, zipOutputName), Buffer.from(permissionZip))
+          generatedFiles.push(zipOutputName)
+        } else {
+          const outputPath = path.join(outputFolder, outputName)
+          fs.writeFileSync(outputPath, output)
+          fs.chmodSync(outputPath, 0o755)
+          generatedFiles.push(outputName)
+        }
       }
 
       // Write README.txt
@@ -407,12 +439,12 @@ export function registerExportHandlers(ctx: IpcContext): void {
 双击对应平台的文件即可在浏览器中打开演示。
 
 文件说明：
-  *-macos-arm64       → Apple Silicon Mac (M1/M2/M3/M4)
-  *-macos-amd64       → Intel Mac
-  *-windows-amd64.exe → Windows 电脑
+  *-macos-arm64(.zip)       → Apple Silicon Mac (M1/M2/M3/M4)
+  *-macos-amd64(.zip)       → Intel Mac
+  *-windows-amd64.exe       → Windows 电脑
 
 使用方法：
-  macOS：双击文件打开，或在终端运行 ./文件名
+  macOS：若为 .zip 文件请先解压，再双击解压后的文件打开
   Windows：双击 .exe 文件打开
   如果提示"无法打开"，请右键 → 打开 → 确认打开
 

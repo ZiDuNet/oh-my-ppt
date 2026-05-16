@@ -184,6 +184,15 @@ ${paragraphs}
 
 function buildImagePic(id: number, rId: string, img: HtmlToPptxImage): string {
   const rot = img.rotate ? ` rot="${degToRot(img.rotate)}"` : ''
+  const opacity =
+    typeof img.opacity === 'number' && Number.isFinite(img.opacity)
+      ? Math.max(0, Math.min(1, img.opacity))
+      : 1
+  const alphaXml =
+    opacity < 0.999 ? `<a:alphaModFix amt="${Math.round(opacity * 100000)}"/>` : ''
+  const blipXml = alphaXml
+    ? `<a:blip r:embed="${rId}">${alphaXml}</a:blip>`
+    : `<a:blip r:embed="${rId}"/>`
   return `<p:pic>
     <p:nvPicPr>
       <p:cNvPr id="${id}" name="Image ${id}"/>
@@ -191,7 +200,7 @@ function buildImagePic(id: number, rId: string, img: HtmlToPptxImage): string {
       <p:nvPr/>
     </p:nvPicPr>
     <p:blipFill>
-      <a:blip r:embed="${rId}"/>
+      ${blipXml}
       <a:stretch><a:fillRect/></a:stretch>
     </p:blipFill>
     <p:spPr>
@@ -462,6 +471,15 @@ interface ImageRel {
   mediaFile: string
 }
 
+type SlideContentItem =
+  | { kind: 'shape'; order: number; priority: number; item: HtmlToPptxShape }
+  | { kind: 'table'; order: number; priority: number; item: HtmlToPptxTable }
+  | { kind: 'image'; order: number; priority: number; item: HtmlToPptxImage }
+  | { kind: 'text'; order: number; priority: number; item: HtmlToPptxTextBox }
+
+const contentOrder = (value: number | undefined, fallback: number): number =>
+  Number.isFinite(value) ? Number(value) : fallback
+
 function buildSlideXml(
   slide: HtmlToPptxSlide,
   imageRels: Map<string, ImageRel>,
@@ -477,7 +495,9 @@ function buildSlideXml(
     bgXml = `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hex}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`
   }
 
-  // Z-order: background image → images → shapes → texts
+  // Z-order: keep the extracted DOM paint order instead of placing all shapes
+  // above/below all images. This keeps background SVGs behind cards while card
+  // icons and chart canvases stay above their parent container shapes.
 
   // Background image
   if (slide.backgroundImage) {
@@ -496,32 +516,60 @@ function buildSlideXml(
     }
   }
 
-  // Images
-  for (const img of slide.images || []) {
-    nextId++
-    const rel = imageRels.get(img.dataUri)
-    if (rel) {
-      shapes.push(buildImagePic(nextId, rel.rId, img))
-    }
-  }
-
-  // Shapes
+  const contentItems: SlideContentItem[] = []
+  let fallbackOrder = 1_000_000
   for (const shape of slide.shapes || []) {
-    nextId++
-    shapes.push(buildShapeXml(nextId, shape))
+    contentItems.push({
+      kind: 'shape',
+      order: contentOrder(shape.order, fallbackOrder++),
+      priority: 10,
+      item: shape
+    })
   }
-
-  // Tables
   for (const table of slide.tables || []) {
-    nextId++
-    shapes.push(buildTableXml(nextId, table))
+    contentItems.push({
+      kind: 'table',
+      order: contentOrder(table.order, fallbackOrder++),
+      priority: 20,
+      item: table
+    })
+  }
+  for (const img of slide.images || []) {
+    contentItems.push({
+      kind: 'image',
+      order: contentOrder(img.order, fallbackOrder++),
+      priority: 30,
+      item: img
+    })
+  }
+  for (const tb of slide.texts) {
+    contentItems.push({
+      kind: 'text',
+      order: contentOrder(tb.order, fallbackOrder++),
+      priority: 40,
+      item: tb
+    })
   }
 
-  // Texts
-  for (const tb of slide.texts) {
+  contentItems.sort((a, b) => a.order - b.order || a.priority - b.priority)
+
+  for (const entry of contentItems) {
     nextId++
-    const xml = buildTextShape(nextId, tb)
-    if (xml) shapes.push(xml)
+    if (entry.kind === 'shape') {
+      shapes.push(buildShapeXml(nextId, entry.item))
+    } else if (entry.kind === 'table') {
+      shapes.push(buildTableXml(nextId, entry.item))
+    } else if (entry.kind === 'image') {
+      const rel = imageRels.get(entry.item.dataUri)
+      if (rel) {
+        shapes.push(buildImagePic(nextId, rel.rId, entry.item))
+      }
+    } else {
+      const xml = buildTextShape(nextId, entry.item)
+      if (xml) {
+        shapes.push(xml)
+      }
+    }
   }
 
   // Overlay images (rendered on top of everything, e.g. KaTeX formula screenshots)
@@ -581,7 +629,7 @@ function buildContentTypesXml(slideCount: number, mediaExtensions: Set<string>):
     `<Default Extension="xml" ContentType="application/xml"/>`
   ]
   for (const ext of mediaExtensions) {
-    const mime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'svg' ? 'image/svg+xml' : `image/${ext}`
     defaults.push(`<Default Extension="${ext}" ContentType="${mime}"/>`)
   }
 
@@ -753,9 +801,10 @@ function buildSlideRelsXml(imageRels: ImageRel[]): string {
 // ─── Media helpers ───────────────────────────────────────────────────
 
 function dataUriToBuffer(dataUri: string): { buffer: Uint8Array; ext: string } | null {
-  const match = dataUri.match(/^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/i)
+  const match = dataUri.match(/^data:image\/(png|jpeg|jpg|gif|svg\+xml);base64,(.+)$/i)
   if (!match) return null
-  const ext = match[1].toLowerCase() === 'jpg' ? 'jpg' : match[1].toLowerCase()
+  const rawExt = match[1].toLowerCase()
+  const ext = rawExt === 'jpg' ? 'jpg' : rawExt === 'svg+xml' ? 'svg' : rawExt
   const raw = atob(match[2])
   const buffer = new Uint8Array(raw.length)
   for (let i = 0; i < raw.length; i++) {
