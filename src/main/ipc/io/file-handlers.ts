@@ -57,6 +57,13 @@ export function registerFileHandlers(ctx: IpcContext): void {
         // ignore
       }
 
+      // 检查目标文件是否存在
+      try {
+        await fs.promises.access(safePath, fs.constants.R_OK)
+      } catch {
+        throw new Error(`File not found: ${safePath}`)
+      }
+
       const baseUrl = pathToFileURL(safePath).toString()
       const hashValue =
         typeof hashRaw === 'string' && hashRaw.trim().length > 0
@@ -64,7 +71,26 @@ export function registerFileHandlers(ctx: IpcContext): void {
             ? hashRaw
             : `#${hashRaw}`
           : ''
-      await shell.openExternal(`${baseUrl}${hashValue}`)
+      const fullUrl = `${baseUrl}${hashValue}`
+      // Windows 上 shell.openExternal 对含中文路径的 file:// URL 不稳定，
+      // 优先用 shell.openPath 打开本地文件，失败时回退 openExternal
+      if (process.platform === 'win32' && fullUrl.startsWith('file://')) {
+        const result = await shell.openPath(safePath)
+        if (result && result !== '') {
+          // openPath 失败时尝试 openExternal 作为 fallback
+          try {
+            await shell.openExternal(fullUrl)
+          } catch {
+            throw new Error(`Failed to open: ${safePath}`)
+          }
+        }
+      } else {
+        try {
+          await shell.openExternal(fullUrl)
+        } catch {
+          throw new Error(`Failed to open in browser: ${fullUrl}`)
+        }
+      }
       return { success: true }
     }
   )

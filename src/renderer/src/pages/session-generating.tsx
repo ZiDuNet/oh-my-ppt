@@ -16,6 +16,7 @@ import { ScrollArea } from '../components/ui/ScrollArea'
 import dayjs from 'dayjs'
 import { getEditorGate, type EditorGate } from '../lib/sessionMetadata'
 import { useLang, type Lang } from '../i18n'
+import { ParticleTextCanvas } from '../components/ParticleTextCanvas'
 
 type LocationState = {
   initialPrompt?: string
@@ -671,6 +672,29 @@ export function SessionGeneratingPage(): React.JSX.Element {
   const fullyGenerated = isSessionFullyGenerated(editorGate)
   const hasGeneratedPages = editorGate.generatedCount > 0
 
+  const stageTextMap: Record<string, string> = {
+    preflight: t('generating.stages.preflight'),
+    planning: t('generating.stages.planning'),
+    rendering: t('generating.stages.rendering'),
+    validation: t('generating.stages.validation')
+  }
+  const stageName = stageTextMap[currentStage] || ''
+  let particleProgress = ''
+  let particleStage = ''
+  if (status === 'completed') {
+    particleProgress = displayProgress + '%'
+    particleStage = t('sessions.statusComplete')
+  } else if (status === 'failed') {
+    particleProgress = displayProgress + '%'
+    particleStage = t('generating.interrupted')
+  } else {
+    particleProgress = displayProgress + '%'
+    particleStage = stageName
+    if (currentStage === 'rendering' && completedPageCount > 0) {
+      particleStage = `${stageName} ${completedPageCount}/${totalPages}`
+    }
+  }
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(165deg,#d8edf8_0%,#cce6ee_38%,#e9e3d1_100%)]">
       <style>{`
@@ -681,6 +705,17 @@ export function SessionGeneratingPage(): React.JSX.Element {
 
       {/* ── Main content area ── */}
       <div className="relative flex flex-1 overflow-hidden">
+        {/* 粒子文字动画背景 */}
+        {particleProgress && (
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <ParticleTextCanvas
+              line1={particleProgress}
+              line2={particleStage}
+              className="h-full w-full"
+            />
+          </div>
+        )}
+
         {/* Info panel — top-left overlay */}
         <div className="app-no-drag absolute left-6 top-16 z-10 flex max-w-[460px] items-start gap-3 rounded-xl border border-[#d4d9be]/80 bg-[#fff9ef]/72 px-4 py-3 text-[#4f613f] shadow-[0_10px_22px_rgba(79,97,63,0.18)] backdrop-blur-sm">
           <button
