@@ -9,7 +9,6 @@ import { SettingsPage } from './pages/settings'
 import { StylesPage } from './pages/styles'
 import { FontsPage } from './pages/fonts'
 import { StyleEditorPage } from './pages/style-editor'
-import { PresentationPage } from './pages/presentation'
 import { AppToaster } from './components/AppToaster'
 import { ScrollArea } from './components/ui/ScrollArea'
 import { useT } from './i18n'
@@ -19,7 +18,6 @@ import { useToastStore } from './store'
 function App(): React.JSX.Element {
   const location = useLocation()
   const isSessionDetailRoute = Boolean(matchPath('/sessions/:id/*', location.pathname))
-  const isPresentRoute = location.pathname === '/present'
   const { info } = useToastStore()
   const t = useT()
 
@@ -40,14 +38,6 @@ function App(): React.JSX.Element {
       unsubscribe?.()
     }
   }, [info, t])
-
-  if (isPresentRoute) {
-    return (
-      <Routes>
-        <Route path="/present" element={<PresentationPage />} />
-      </Routes>
-    )
-  }
 
   if (isSessionDetailRoute) {
     return (

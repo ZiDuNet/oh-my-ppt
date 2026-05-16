@@ -9,6 +9,7 @@ import type { IpcContext } from '../context'
 import { resolveActiveModelConfig } from '../config/model-config-utils'
 import { readAppLocale, uiText } from '../config/locale-utils'
 import { normalizeFontSelection } from '@shared/generation'
+import { ensureSessionRuntimeCompatible } from './runtime-assets'
 
 export function registerSessionHandlers(ctx: IpcContext): void {
   const {
@@ -217,6 +218,7 @@ export function registerSessionHandlers(ctx: IpcContext): void {
       throw new Error('session_pages is empty after migration; please re-run migration patch')
     }
     const projectDir = await resolveSessionProjectDir(sessionId)
+    await ensureSessionRuntimeCompatible(ctx, projectDir)
     for (const sp of sessionPages) {
       const htmlPath = resolvePageHtmlPath(projectDir, sp.file_slug, sp.html_path)
       let html = ''

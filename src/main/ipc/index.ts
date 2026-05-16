@@ -41,5 +41,5 @@ export function setupIPC(
   registerDocumentParseHandlers(context)
   registerPptxImportHandlers(context)
   registerHistoryHandlers(context)
-  registerPresentationHandlers()
+  registerPresentationHandlers(context)
 }

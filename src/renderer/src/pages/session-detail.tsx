@@ -266,14 +266,6 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }, [id, loadSession, resetForSessionChange, setMessages])
 
-  // Ensure git history baseline exists for old sessions (runs once per session)
-  const baselineDoneRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!id || !currentSession || baselineDoneRef.current === id) return
-    baselineDoneRef.current = id
-    void ipc.ensureHistoryBaseline(id)
-  }, [id, currentSession])
-
   useEffect(() => {
     useGenerateStore.getState().setPages(currentGeneratedPages)
   }, [currentGeneratedPages])
