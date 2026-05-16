@@ -66,7 +66,11 @@ async function request<T>(
     opts.body = JSON.stringify(body)
   }
   const resp = await fetch(url, opts)
-  const json = await resp.json()
+  const text = await resp.text()
+  if (!text) {
+    throw new Error(`NewAPI ${method} ${path} returned empty response (status ${resp.status})`)
+  }
+  const json = JSON.parse(text)
   if (!json.success) {
     throw new Error(json.message || 'NewAPI request failed')
   }
@@ -193,13 +197,24 @@ export async function getModelsByApiKey(apiKey: string): Promise<ModelInfo[]> {
       Authorization: `Bearer ${apiKey}`
     }
   })
-  const json = await resp.json()
+  const text = await resp.text()
+  if (!text) {
+    log.warn('[newapi] /v1/models returned empty response', { status: resp.status })
+    return []
+  }
+  let json: { data?: Array<{ id?: string; owned_by?: string }> }
+  try {
+    json = JSON.parse(text)
+  } catch {
+    log.warn('[newapi] /v1/models returned invalid JSON', { status: resp.status, body: text.slice(0, 200) })
+    return []
+  }
   if (!json.data || !Array.isArray(json.data)) {
-    log.warn('[newapi] /v1/models returned unexpected format', { json })
+    log.warn('[newapi] /v1/models returned unexpected format', { status: resp.status })
     return []
   }
   return json.data
-    .map((m: { id?: string; owned_by?: string }) => ({
+    .map((m) => ({
       id: m.id || '',
       ownedBy: m.owned_by || ''
     }))

@@ -91,7 +91,7 @@ export function Sidebar(): React.JSX.Element {
         </div>
         <p className="mt-1 text-xs text-[#7f876e] px-4">{t('nav.tagline')}</p>
         {/* 当前模型 */}
-        {newapiLoggedIn && (activeModelName || visionModelName) && (
+        {newapiLoggedIn && activeModelName && (
           <div className="mt-1.5 space-y-0.5 px-4 text-[10px]">
             {activeModelName && (
               <div className="truncate text-[#4a5a3d]">

@@ -257,9 +257,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         set({
           newapiUser: result.userInfo,
           newapiLoggedIn: true,
-          newapiModels: result.models || []
+          newapiModels: []
         })
         await get().fetchSettings()
+        // 登录后拉取模型列表（不阻塞登录流程）
+        void get().newapiFetchModels()
         return true
       }
       set({ verificationMessage: result.message || '登录失败。' })
@@ -277,23 +279,22 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   newapiLogout: async () => {
-    set({ newapiLoading: true, verificationMessage: null })
+    set({ verificationMessage: null })
     try {
       await ipc.newapiLogout()
       set({
         newapiUser: null,
         newapiLoggedIn: false,
-        newapiModels: []
+        newapiModels: [],
+        newapiLoading: false
       })
-      await get().fetchSettings()
+      void get().fetchSettings()
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
           : '退出登录失败。'
-      set({ verificationMessage: message })
-    } finally {
-      set({ newapiLoading: false })
+      set({ verificationMessage: message, newapiLoading: false })
     }
   },
 

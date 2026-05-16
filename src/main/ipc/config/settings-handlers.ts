@@ -289,9 +289,6 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       // 确保令牌存在，拿到 api key
       const { tokenId, apiKey } = await newapi.ensureToken(session)
 
-      // 通过 OpenAI 标准接口获取可用模型
-      const models = await newapi.getModelsByApiKey(apiKey)
-
       // 持久化 session 信息
       await db.setSetting('newapi_session_cookie', loginResult.cookie)
       await db.setSetting('newapi_user_id', String(loginResult.userId))
@@ -324,9 +321,11 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           baseUrl: NEWAPI_BASE_URL,
           active: true
         })
+        // 主模型为空时，同步清除视觉模型
+        await db.setSetting('vision_model_id', '')
       }
 
-      log.info('[newapi:login] success', { userId: loginResult.userId, modelCount: models.length })
+      log.info('[newapi:login] success', { userId: loginResult.userId })
 
       // 从令牌获取用量信息
       const tokenUsage = await newapi.getTokenUsage(session, 'chaoxi-ppt')
@@ -347,7 +346,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
           status: userInfo.status,
           requestCount: userInfo.request_count
         },
-        models
+        models: []
       }
     } catch (error) {
       const message =
@@ -417,14 +416,18 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
       (c) => c.name === 'chaoxi-ppt' || c.baseUrl === NEWAPI_BASE_URL
     )
     if (!existing) {
+      log.warn('[newapi:getModels] no model_config found')
       return { success: false, message: 'Not logged in' }
     }
     try {
       const apiKey = decryptApiKey(existing.apiKey)
+      log.info('[newapi:getModels] fetching models...', { hasApiKey: !!apiKey, model: existing.model })
       const models = await newapi.getModelsByApiKey(apiKey)
+      log.info('[newapi:getModels] result', { count: models.length })
       return { success: true, models }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to get models'
+      log.error('[newapi:getModels] failed', { message })
       return { success: false, message }
     }
   })
@@ -473,6 +476,7 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     await db.setSetting('newapi_token_id', '')
     await db.setSetting('newapi_username', '')
     await db.setSetting('newapi_display_name', '')
+    await db.setSetting('vision_model_id', '')
 
     // 删除对应的 model_config
     const existing = (await db.listModelConfigs()).find(

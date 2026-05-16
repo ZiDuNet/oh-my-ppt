@@ -79,7 +79,10 @@ const LoggedInPanel = memo(function LoggedInPanel({
   const setVerificationMessage = useSettingsStore((s) => s.setVerificationMessage)
   const verifyApiKey = useSettingsStore((s) => s.verifyApiKey)
   const modelConfigs = useSettingsStore((s) => s.modelConfigs)
+  const newapiFetchModels = useSettingsStore((s) => s.newapiFetchModels)
   const { success, error, warning } = useToastStore()
+
+  const [fetchingModels, setFetchingModels] = useState(false)
 
   const [pendingModel, setPendingModel] = useState(activeModel)
   const [verifying, setVerifying] = useState(false)
@@ -167,6 +170,12 @@ const LoggedInPanel = memo(function LoggedInPanel({
 
   const modelOptions = useMemo(() => models, [models])
 
+  const handleFetchModels = useCallback(async () => {
+    setFetchingModels(true)
+    await newapiFetchModels()
+    setFetchingModels(false)
+  }, [newapiFetchModels])
+
   return (
     <>
       <Card className="mb-4">
@@ -178,7 +187,19 @@ const LoggedInPanel = memo(function LoggedInPanel({
         </CardHeader>
         <CardContent className="space-y-3 p-5 pt-0">
           <div>
-            <label className="mb-1.5 block text-sm font-medium">选择模型</label>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="text-sm font-medium">选择模型</label>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+                disabled={fetchingModels}
+                onClick={() => void handleFetchModels()}
+              >
+                <RefreshCw className={`h-3 w-3 ${fetchingModels ? 'animate-spin' : ''}`} />
+                {fetchingModels ? '获取中...' : '获取模型'}
+              </Button>
+            </div>
             <Select value={pendingModel} onValueChange={setPendingModel}>
               <SelectTrigger className="h-10">
                 <SelectValue placeholder="选择可用模型" />
@@ -337,7 +358,7 @@ function UsagePanel(): React.JSX.Element {
             <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-4">
               <div><span>邮箱：</span><span className="text-[#3e4a32]">{newapiUser.email || '-'}</span></div>
               <div><span>用户组：</span><span className="text-[#3e4a32]">{newapiUser.group || '-'}</span></div>
-              <div><span>角色：</span><span className="text-[#3e4a32]">{newapiUser.role === 1 ? '管理员' : newapiUser.role === 2 ? '用户' : `${newapiUser.role}`}</span></div>
+              <div><span>角色：</span><span className="text-[#3e4a32]">{newapiUser.role === 100 ? '超级管理员' : newapiUser.role === 10 ? '管理员' : '用户'}</span></div>
               <div><span>请求次数：</span><span className="text-[#3e4a32]">{newapiUser.requestCount}</span></div>
             </div>
             {/* 额度行 */}
@@ -544,6 +565,7 @@ export function SettingsPage(): React.JSX.Element {
   const newapiFetchStatus = useSettingsStore((s) => s.newapiFetchStatus)
   const newapiLoggedIn = useSettingsStore((s) => s.newapiLoggedIn)
   const newapiModels = useSettingsStore((s) => s.newapiModels)
+  const newapiFetchModels = useSettingsStore((s) => s.newapiFetchModels)
   const modelConfigs = useSettingsStore((s) => s.modelConfigs)
   const settings = useSettingsStore((s) => s.settings)
   const { success, error, info } = useToastStore()
@@ -562,6 +584,13 @@ export function SettingsPage(): React.JSX.Element {
 
   const activeModel = modelConfigs.find((c) => c.active)?.model || ''
   const visionModelId = settings?.visionModelId || ''
+
+  // 切到模型接入 tab 时拉取模型列表
+  useEffect(() => {
+    if (activeTab === 'model' && newapiLoggedIn) {
+      void newapiFetchModels()
+    }
+  }, [activeTab, newapiLoggedIn, newapiFetchModels])
 
   useEffect(() => {
     let active = true
