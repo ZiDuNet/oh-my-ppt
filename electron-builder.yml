@@ -68,7 +68,6 @@ nsis:
   allowToChangeInstallationDirectory: true
   allowElevation: true
   createStartMenuShortcut: true
-  include: installer.nsh
 mac:
   icon: build/icons/icon.icns
   identity: null
