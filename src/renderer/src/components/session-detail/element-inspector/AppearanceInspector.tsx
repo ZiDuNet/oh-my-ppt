@@ -1,5 +1,6 @@
 import { Palette } from 'lucide-react'
 import { Input } from '../../ui/Input'
+import { ColorPicker } from '../../ui/ColorPicker'
 import { InspectorSection } from './InspectorSection'
 import type { ElementEditorProps } from './types'
 import { useT } from '@renderer/i18n'
@@ -40,18 +41,9 @@ export function AppearanceInspector({
             {t('sessionDetail.backgroundColor')}
           </span>
           <div className="flex items-center gap-2">
-            <input
-              type="color"
+            <ColorPicker
               value={draft.backgroundColor || '#ffffff'}
-              onChange={(event) => onDraftChange({ ...draft, backgroundColor: event.target.value })}
-              onBlur={(event) =>
-                onDraftChange(
-                  { ...draft, backgroundColor: event.target.value },
-                  { commit: true, fields: ['backgroundColor'] }
-                )
-              }
-              className="h-8 w-10 shrink-0 cursor-pointer rounded-full border border-[#d7cbb7]/70 bg-transparent p-1"
-              aria-label={t('sessionDetail.backgroundColor')}
+              onChange={(v) => onDraftChange({ ...draft, backgroundColor: v })}
             />
             <Input
               value={draft.backgroundColor}

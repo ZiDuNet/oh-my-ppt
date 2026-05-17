@@ -1,6 +1,7 @@
 import { Type } from 'lucide-react'
 import { Input, Textarea } from '../../ui/Input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/Select'
+import { ColorPicker } from '../../ui/ColorPicker'
 import { InspectorSection } from './InspectorSection'
 import type { ElementEditorProps } from './types'
 import { useT } from '@renderer/i18n'
@@ -35,18 +36,9 @@ export function TextInspector({
                 {t('sessionDetail.textColor')}
               </span>
               <div className="flex items-center gap-2">
-                <input
-                  type="color"
+                <ColorPicker
                   value={draft.color || '#34402c'}
-                  onChange={(event) => onDraftChange({ ...draft, color: event.target.value })}
-                  onBlur={(event) =>
-                    onDraftChange(
-                      { ...draft, color: event.target.value },
-                      { commit: true, fields: ['color'] }
-                    )
-                  }
-                  className="h-8 w-10 shrink-0 cursor-pointer rounded-full border border-[#d7cbb7]/70 bg-transparent p-1"
-                  aria-label={t('sessionDetail.textColor')}
+                  onChange={(v) => onDraftChange({ ...draft, color: v })}
                 />
                 <Input
                   value={draft.color}
