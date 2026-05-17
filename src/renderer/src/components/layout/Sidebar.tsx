@@ -257,7 +257,7 @@ export function Sidebar(): React.JSX.Element {
         )}
       </div>
 
-      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+      {loginOpen && <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />}
     </aside>
   )
 }
