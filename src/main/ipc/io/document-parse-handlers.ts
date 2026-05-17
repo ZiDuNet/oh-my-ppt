@@ -724,6 +724,7 @@ const runDocumentPlanAgent = async (args: {
   apiKey: string
   model: string
   baseUrl: string
+  maxTokens?: number
   modelTimeoutMs: number
   workspaceDir: string
   file: PreparedSourceFile
@@ -732,7 +733,7 @@ const runDocumentPlanAgent = async (args: {
   existingBrief: string
   retryHint?: string
 }): Promise<string> => {
-  const model = resolveModel(args.provider, args.apiKey, args.model, args.baseUrl, 0.2)
+  const model = resolveModel(args.provider, args.apiKey, args.model, args.baseUrl, 0.2, args.maxTokens)
   const prompt = buildDocumentPlanPrompt({
     topic: args.topic,
     pageCount: args.pageCount,
@@ -860,6 +861,7 @@ const runImageDocumentPlanModel = async (args: {
   apiKey: string
   model: string
   baseUrl: string
+  maxTokens?: number
   modelTimeoutMs: number
   file: PreparedSourceFile
   topic: string
@@ -888,6 +890,7 @@ const runImageDocumentPlanModel = async (args: {
       apiKey: args.apiKey,
       model: args.model,
       baseUrl: args.baseUrl,
+      maxTokens: args.maxTokens,
       modelTimeoutMs: args.modelTimeoutMs,
       logTag: 'documents:parsePlan:image'
     })
@@ -926,6 +929,7 @@ export function registerDocumentParseHandlers(ctx: IpcContext): void {
     const modelTimeouts = await resolveGlobalModelTimeouts(ctx)
     const { provider, model, apiKey } = modelConfig
     const baseUrl = modelConfig.baseUrl
+    const maxTokens = modelConfig.maxTokens
     const modelTimeoutMs = modelTimeouts.document
 
     const topic = typeof input.topic === 'string' ? input.topic.trim() : ''
@@ -953,6 +957,7 @@ export function registerDocumentParseHandlers(ctx: IpcContext): void {
               apiKey,
               model,
               baseUrl,
+              maxTokens,
               modelTimeoutMs,
               file: sourceFile,
               topic,
@@ -965,6 +970,7 @@ export function registerDocumentParseHandlers(ctx: IpcContext): void {
               apiKey,
               model,
               baseUrl,
+              maxTokens,
               modelTimeoutMs,
               workspaceDir: docsDir,
               file: sourceFile,

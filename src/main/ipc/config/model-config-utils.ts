@@ -14,6 +14,7 @@ export interface ActiveModelConfig {
   model: string
   apiKey: string
   baseUrl: string
+  maxTokens: number
 }
 
 export async function resolveGlobalModelTimeouts(
@@ -79,7 +80,8 @@ export async function resolveActiveModelConfig(
     provider,
     model,
     apiKey,
-    baseUrl: String(config.baseUrl || '').trim()
+    baseUrl: String(config.baseUrl || '').trim(),
+    maxTokens: config.maxTokens || 4096
   }
 }
 
