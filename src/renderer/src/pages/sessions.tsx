@@ -273,7 +273,7 @@ export function SessionsPage(): React.JSX.Element {
               <CardContent>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="soft-pill inline-flex items-center gap-1 rounded-lg px-3 py-1 text-secondary-foreground">
-                    {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquare className="h-3 w-3" />}
+                    {(isFullyComplete || isPartialComplete) ? <MessageSquare className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
                     {actionText}
                   </span>
                   <span className={`rounded-lg border px-2 py-1 font-semibold ${statusClassName}`}>
