@@ -16,7 +16,8 @@ const ASSET_MIME_MAP: Record<string, string> = {
   webm: 'video/webm',
   ogg: 'video/ogg',
   ogv: 'video/ogg',
-  woff2: 'font/woff2'
+  woff2: 'font/woff2',
+  html: 'text/html'
 }
 
 const dynamicAllowedRoots = new Set<string>()

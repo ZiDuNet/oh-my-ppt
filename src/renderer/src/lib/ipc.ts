@@ -34,6 +34,7 @@ export interface StyleCategory {
     description: string
     source?: 'builtin' | 'custom' | 'override'
     editable?: boolean
+    styleCase?: string
   }>
 }
 
@@ -47,6 +48,7 @@ export interface StyleDetail {
   source?: 'builtin' | 'custom' | 'override'
   editable?: boolean
   category?: string
+  styleCase?: string
 }
 
 export interface StyleListItem {
@@ -56,6 +58,8 @@ export interface StyleListItem {
   category: string
   source?: 'builtin' | 'custom' | 'override' | 'cloud'
   editable?: boolean
+  styleCase?: string
+  previewPath?: string | null
   createdAt?: number
   updatedAt?: number
 }
@@ -66,6 +70,7 @@ export interface StyleParseResult {
   category: string
   aliases: string[]
   styleSkill: string
+  styleCase?: string
 }
 
 export interface GenerateRunStateSnapshot {
@@ -337,7 +342,10 @@ export const ipc = {
     getIpc().invoke('export:pdf', { sessionId }) as Promise<ExportDeckResult>,
   exportPng: (sessionId: string) =>
     getIpc().invoke('export:png', { sessionId }) as Promise<ExportDeckResult>,
-  exportPptx: (sessionId: string, options?: { imageOnly?: boolean }) =>
+  exportPptx: (
+    sessionId: string,
+    options?: { imageOnly?: boolean; embedFonts?: boolean | 'auto' | 'always' | 'never' }
+  ) =>
     getIpc().invoke('export:pptx', { sessionId, ...options }) as Promise<ExportDeckResult>,
   exportSlidePack: (sessionId: string) =>
     getIpc().invoke('export:slidePack', { sessionId }) as Promise<ExportDeckResult>,
@@ -408,6 +416,7 @@ export const ipc = {
           description: string
           source?: 'builtin' | 'custom' | 'override'
           editable?: boolean
+          styleCase?: string
         }>
       >
       defaultStyle: string
@@ -427,6 +436,7 @@ export const ipc = {
     category?: string
     aliases?: string[]
     styleSkill: string
+    styleCase?: string
   }) =>
     getIpc().invoke('styles:create', payload) as Promise<{
       success: boolean
@@ -440,6 +450,7 @@ export const ipc = {
     category?: string
     aliases?: string[]
     styleSkill: string
+    styleCase?: string
   }) =>
     getIpc().invoke('styles:update', payload) as Promise<{
       success: boolean

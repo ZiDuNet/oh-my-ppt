@@ -14,7 +14,8 @@ export type {
   HtmlToPptxSlide,
   HtmlToPptxDocument,
   HtmlToPptxExtractOptions,
-  HtmlToPptxExtractedSlide
+  HtmlToPptxExtractedSlide,
+  HtmlToPptxEmbeddedFont
 } from './types'
 
 import type {
@@ -33,7 +34,7 @@ import { buildTableExtractScript } from './table-extract'
 const DEFAULT_SLIDE_WIDTH = 13.333
 const DEFAULT_SLIDE_HEIGHT = 7.5
 const DEFAULT_MAX_TEXT_CHARS = 1000
-const DEFAULT_MAX_IMAGE_BYTES = 2 * 1024 * 1024
+const DEFAULT_MAX_IMAGE_BYTES = 12 * 1024 * 1024
 const MAX_EXPORT_FONT_SIZE_PT = 144
 const require = createRequire(import.meta.url)
 const PRETEXT_MODULE_URL = pathToFileURL(require.resolve('@chenglou/pretext')).toString()
@@ -90,7 +91,7 @@ const resolveExportFontFace = (text: string, value: string | undefined): string 
 }
 
 const normalizeDataUriMime = (value: string): string => {
-  const match = value.match(/^data:(image\/(?:png|jpeg|jpg|gif|svg\+xml));base64,/i)
+  const match = value.match(/^data:(image\/(?:png|jpeg|jpg|gif));base64,/i)
   if (!match) return ''
   return match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase()
 }
@@ -254,7 +255,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     if (Number(style.opacity || '1') < 0.04) return false;
     if (rect.width < 2 || rect.height < 2) return false;
     if (rect.bottom < 0 || rect.right < 0 || rect.left > pageWidthPx || rect.top > pageHeightPx) return false;
-    if (element.closest('script, style, noscript, .katex, .katex-mathml')) return false;
+    if (element.closest('script, style, noscript, .katex, .katex-mathml, [data-pptx-formula-block]')) return false;
     return true;
   };
 
@@ -415,7 +416,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
   };
 
   // ========== Shapes: skip consumed table elements ==========
-  const shapeNodes = Array.from(pageElement.querySelectorAll('section,main,article,header,footer,aside,div,figure,figcaption,table,td,th'));
+  const shapeNodes = Array.from(pageElement.querySelectorAll('section,main,article,header,footer,aside,div,figure,figcaption,table,td,th,span'));
   const shapes = [];
   const minShapeArea = layoutWidthPx * layoutHeightPx * 0.005;
   for (const element of shapeNodes) {
@@ -532,6 +533,50 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     const letterSpacing = Number.parseFloat(style.letterSpacing);
     return Number.isFinite(letterSpacing) ? letterSpacing : 0;
   };
+  const spacingPtFor = (style, property) => {
+    const value = Number.parseFloat(style[property] || '0') || 0;
+    return Math.max(0, Math.min(72, value * pointsPerPx));
+  };
+  const resolveTextBoxVerticalAlign = (style) => {
+    const verticalAlign = String(style.verticalAlign || '');
+    if (verticalAlign === 'middle') return 'middle';
+    if (verticalAlign === 'bottom' || verticalAlign === 'text-bottom') return 'bottom';
+    const display = String(style.display || '');
+    if (display.includes('flex') || display.includes('grid')) {
+      const flexDirection = String(style.flexDirection || 'row');
+      const verticalAxisValue = /column/i.test(flexDirection)
+        ? String(style.justifyContent || '')
+        : String(style.alignItems || '');
+      if (verticalAxisValue === 'center') return 'middle';
+      if (verticalAxisValue === 'end' || verticalAxisValue === 'flex-end') return 'bottom';
+    }
+    return 'top';
+  };
+  const resolveListBullet = (element) => {
+    if (!element || String(element.tagName || '').toUpperCase() !== 'LI') return undefined;
+    const list = element.parentElement?.closest?.('ol,ul');
+    if (!list) return undefined;
+    const listStyleType = String(window.getComputedStyle(element).listStyleType || '');
+    if (listStyleType === 'none') return undefined;
+    let listDepth = 0;
+    let current = element.parentElement;
+    while (current && current !== pageElement) {
+      if (current.tagName === 'OL' || current.tagName === 'UL') listDepth += 1;
+      current = current.parentElement;
+    }
+    const level = Math.max(0, listDepth - 1);
+    if (String(list.tagName || '').toUpperCase() === 'OL') {
+      const value = Number.parseInt(element.getAttribute('value') || '', 10);
+      if (Number.isFinite(value) && value > 0) {
+        return { type: 'number', level, startAt: value };
+      }
+      const start = Number.parseInt(list.getAttribute('start') || '1', 10) || 1;
+      const previousItems = Array.from(list.children || []).filter((child) => child.tagName === 'LI');
+      const index = previousItems.indexOf(element);
+      return { type: 'number', level, startAt: Math.max(1, start + Math.max(0, index)) };
+    }
+    return { type: 'bullet', level };
+  };
   const buildCanvasFont = (style, fontSizePx) => {
     const weight = Number.parseInt(style.fontWeight || '400', 10) || 400;
     const italic = style.fontStyle === 'italic' || style.fontStyle === 'oblique' ? 'italic' : '';
@@ -603,7 +648,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     const children = Array.from(element.children || []);
     for (const child of children) {
       const text = normalize(child.innerText || child.textContent);
-      if (!text || child.closest?.('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml')) continue;
+      if (!text || child.closest?.('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml, [data-pptx-formula-block]')) continue;
       const childStyle = window.getComputedStyle(child);
       const childRect = child.getBoundingClientRect();
       if (!isVisible(child, childStyle, childRect)) continue;
@@ -624,7 +669,8 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       if (!text) return;
       shouldWrap = false;
     }
-    if (shouldWrap && !isVerticalText) {
+    const bullet = resolveListBullet(parentElement);
+    if (shouldWrap && !isVerticalText && !bullet) {
       const pretextLayout = layoutTextWithPretext(text, rect, parentStyle);
       if (pretextLayout && pretextLayout.lines.length > 0) {
         pretextLayout.lines.forEach((line) => pushTextBox(line.text, line.rect, parentStyle, parentElement, false));
@@ -674,6 +720,10 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       rotate: parseRotate(parentStyle),
       order: orderFor(parentElement),
       paintId: registerPaintTarget(parentElement),
+      paragraphSpacingBefore: spacingPtFor(parentStyle, 'marginTop'),
+      paragraphSpacingAfter: spacingPtFor(parentStyle, 'marginBottom'),
+      verticalAlign: resolveTextBoxVerticalAlign(parentStyle),
+      bullet,
       lineSpacing: parentStyle.lineHeight && parentStyle.lineHeight !== 'normal'
         ? Math.max(fontSizePt * 1.08, (Number.parseFloat(parentStyle.lineHeight) || 0) * pointsPerPx)
         : isVerticalText
@@ -692,6 +742,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
   const shouldExportElementText = (element, style, text) => {
     if (!text) return false;
     if (element.querySelector?.('.katex')) return false;
+    if (element.closest?.('[data-pptx-formula-block]')) return false;
     if (hasNestedTextBlock(element)) return false;
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'CANVAS', 'VIDEO', 'IFRAME', 'MATH'].includes(element.tagName)) return false;
     const tag = element.tagName;
@@ -704,7 +755,25 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     const isBlockLike =
       ['block', 'flex', 'grid', 'table-cell', 'list-item'].includes(style.display) ||
       ['absolute', 'fixed'].includes(style.position);
-    return isBlockLike && text.length >= 6 && text.length <= 180;
+    if (!isBlockLike || text.length < 6 || text.length > 180) return false;
+    // Skip if all visible children are badge-like (own bg color, e.g. pill tags).
+    // Their backgrounds are extracted as shapes; text should be extracted per-child
+    // via traverseText so it aligns with each badge shape.
+    const children = Array.from(element.children);
+    if (children.length >= 2) {
+      let badgeCount = 0;
+      let visibleCount = 0;
+      for (const child of children) {
+        if (child.closest('script, style, noscript')) continue;
+        const cs = window.getComputedStyle(child);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity || '1') < 0.04) continue;
+        visibleCount++;
+        const bg = rgbToHex(cs.backgroundColor);
+        if (bg && bg !== backgroundColor) badgeCount++;
+      }
+      if (visibleCount >= 2 && badgeCount === visibleCount) return false;
+    }
+    return true;
   };
   const exportBlockTextElements = () => {
     const candidates = Array.from(pageElement.querySelectorAll(
@@ -712,7 +781,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     ));
     for (const element of candidates) {
       if (texts.length >= maxTextBoxes) break;
-      if (element.closest('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml')) continue;
+      if (element.closest('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml, [data-pptx-formula-block]')) continue;
       // Skip elements inside consumed tables
       if (isInsideConsumedTable(element)) continue;
       if (isInsideConsumedTextElement(element)) continue;
@@ -781,7 +850,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
   const addTextNode = (node, parentStyle, parentElement) => {
     if (texts.length >= maxTextBoxes) return;
     if (parentElement && isInsideConsumedTextElement(parentElement)) return;
-    if (parentElement && parentElement.closest?.('.katex, .katex-mathml')) return;
+    if (parentElement && parentElement.closest?.('.katex, .katex-mathml, [data-pptx-formula-block]')) return;
     // Skip text nodes inside consumed tables
     if (parentElement && isInsideConsumedTable(parentElement)) return;
     const text = clampText(node.textContent);
@@ -814,7 +883,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const element = node;
     if (consumedTextElements.has(element)) return;
-    if (element.closest('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml')) return;
+    if (element.closest('script, style, noscript, svg, canvas, video, iframe, .katex, .katex-mathml, [data-pptx-formula-block]')) return;
     // Skip elements inside consumed tables
     if (isInsideConsumedTable(element)) return;
     const style = window.getComputedStyle(element);
@@ -833,6 +902,96 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     traverseText(child, style, pageElement);
   });
 
+  const allowedPptxImageDataUri = (dataUri) =>
+    /^data:image\\/(?:png|jpeg|jpg|gif);base64,/i.test(String(dataUri || ''));
+  const rasterImageToPngDataUri = async (source, width, height) => {
+    if (!source) return '';
+    return await new Promise((resolve) => {
+      const image = source instanceof HTMLImageElement ? source : new Image();
+      let objectUrl = '';
+      const cleanup = () => {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      };
+      const draw = () => {
+        try {
+          const cssWidth = Number(width) || image.naturalWidth || image.width || 1;
+          const cssHeight = Number(height) || image.naturalHeight || image.height || 1;
+          const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.min(4096, Math.round(cssWidth * scale)));
+          canvas.height = Math.max(1, Math.min(4096, Math.round(cssHeight * scale)));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            cleanup();
+            resolve('');
+            return;
+          }
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          cleanup();
+          resolve(canvas.toDataURL('image/png'));
+        } catch (_err) {
+          cleanup();
+          resolve('');
+        }
+      };
+      if (source instanceof HTMLImageElement) {
+        if (source.complete && (source.naturalWidth || source.width)) {
+          draw();
+          return;
+        }
+        source.addEventListener('load', draw, { once: true });
+        source.addEventListener('error', () => resolve(''), { once: true });
+        return;
+      }
+      image.onload = draw;
+      image.onerror = () => {
+        cleanup();
+        resolve('');
+      };
+      if (source instanceof Blob) {
+        objectUrl = URL.createObjectURL(source);
+        image.src = objectUrl;
+      } else {
+        image.crossOrigin = 'anonymous';
+        image.src = String(source);
+      }
+    });
+  };
+  const readBlobAsDataUri = async (blob) =>
+    await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(blob);
+    });
+  const fetchImageAsDataUri = async (url, width, height) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return '';
+      const blob = await response.blob();
+      const mime = String(blob.type || '').toLowerCase();
+      if (/^image\\/(?:png|jpeg|jpg|gif)$/.test(mime)) {
+        return await readBlobAsDataUri(blob);
+      }
+      return await rasterImageToPngDataUri(blob, width, height);
+    } catch {
+      return '';
+    }
+  };
+  const normalizeImageSourceToPptxDataUri = async (source, width, height) => {
+    const url = String(source || '').trim();
+    if (!url) return '';
+    if (allowedPptxImageDataUri(url)) return url;
+    if (/^data:image\\//i.test(url)) {
+      return await rasterImageToPngDataUri(url, width, height);
+    }
+    try {
+      return await fetchImageAsDataUri(new URL(url, document.baseURI).toString(), width, height);
+    } catch {
+      return '';
+    }
+  };
   const canvasToDataUri = (canvas) => {
     try {
       if (!canvas.width || !canvas.height) return '';
@@ -841,34 +1000,47 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       return '';
     }
   };
-  const imageToDataUri = async (img) => {
+  const imageToDataUri = async (img, width, height) => {
     if (!img.currentSrc && !img.src) return '';
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
-      if (!canvas.width || !canvas.height) return '';
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return '';
-      ctx.drawImage(img, 0, 0);
-      return canvas.toDataURL('image/png');
+      const source = img.currentSrc || img.src;
+      if (allowedPptxImageDataUri(source)) return source;
+      const rendered = await rasterImageToPngDataUri(img, width, height);
+      if (rendered) return rendered;
+      return await normalizeImageSourceToPptxDataUri(source, width, height);
     } catch {
-      try {
-        const response = await fetch(img.currentSrc || img.src);
-        if (!response.ok) return '';
-        const blob = await response.blob();
-        return await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(String(reader.result || ''));
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(blob);
-        });
-      } catch {
-        return '';
-      }
+      return await normalizeImageSourceToPptxDataUri(img.currentSrc || img.src, width, height);
     }
   };
-  const svgToDataUri = (svg) => {
+  const dataImageToPngDataUri = async (dataUri, width, height) => {
+    if (!dataUri) return '';
+    return await new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        try {
+          const cssWidth = Number(width) || image.naturalWidth || image.width || 1;
+          const cssHeight = Number(height) || image.naturalHeight || image.height || 1;
+          const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.min(4096, Math.round(cssWidth * scale)));
+          canvas.height = Math.max(1, Math.min(4096, Math.round(cssHeight * scale)));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve('');
+            return;
+          }
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/png'));
+        } catch (_err) {
+          resolve('');
+        }
+      };
+      image.onerror = () => resolve('');
+      image.src = dataUri;
+    });
+  };
+  const svgToDataUri = async (svg, width, height) => {
     try {
       const clone = svg.cloneNode(true);
       const inlinePaint = (source, target) => {
@@ -903,7 +1075,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       }
       const xml = new XMLSerializer().serializeToString(clone);
       const base64 = btoa(unescape(encodeURIComponent(xml)));
-      return 'data:image/svg+xml;base64,' + base64;
+      return await dataImageToPngDataUri('data:image/svg+xml;base64,' + base64, width, height);
     } catch {
       return '';
     }
@@ -924,13 +1096,13 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
       tagName === 'CANVAS'
         ? canvasToDataUri(element)
         : tagName === 'SVG'
-          ? svgToDataUri(element)
-          : await imageToDataUri(element);
-    if (!/^data:image\\/(?:png|jpeg|jpg|gif|svg\\+xml);base64,/i.test(dataUri)) continue;
+          ? await svgToDataUri(element, rect.width, rect.height)
+          : await imageToDataUri(element, rect.width, rect.height);
+    if (!allowedPptxImageDataUri(dataUri)) continue;
     if (maxImageDataUriLength > 128 && dataUri.length > maxImageDataUriLength) continue;
     images.push({
       dataUri,
-      mimeType: dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif|svg\\+xml));base64,/i)?.[1] || 'image/png',
+      mimeType: dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif));base64,/i)?.[1] || 'image/png',
       x,
       y,
       w,
@@ -947,13 +1119,26 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
   // 用已提取的 dataUri 去重，避免 background-image 与 img/canvas 重复提取
   const seenDataUris = new Set(images.map((img) => img.dataUri));
 
-  // 提取 CSS background-image 中的图片（仅 data URI 内联图片）
+  const extractCssImageUrls = (backgroundImage) => {
+    const source = String(backgroundImage || '');
+    if (!source || source === 'none') return [];
+    const urls = [];
+    const urlRegex = /url\\((?:["']?)(.*?)(?:["']?)\\)/gi;
+    let match;
+    while ((match = urlRegex.exec(source))) {
+      const value = String(match[1] || '').trim();
+      if (value && !value.startsWith('data:font/')) urls.push(value);
+    }
+    return urls;
+  };
+
+  // 提取 CSS background-image / image-set 中的图片
   const bgImageCandidates = []
   for (const el of pageElement.querySelectorAll('*')) {
     if (bgImageCandidates.length >= maxImages) break
     const style = window.getComputedStyle(el)
     const bg = style.backgroundImage || ''
-    if (!/^url\\(/i.test(bg) || !/data:image\\//i.test(bg)) continue
+    if (extractCssImageUrls(bg).length === 0) continue
     bgImageCandidates.push({ el, style })
   }
 
@@ -962,12 +1147,12 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     const { rect, x, y, w, h } = elementToBox(el)
     if (!isVisible(el, style, rect)) continue
 
-    const bgMatch = (style.backgroundImage || '').match(
-      /url\\(["']?(data:image\\/[^;]+;base64,[^"')]+)["']?\\)/i
-    )
-    if (!bgMatch) continue
-    const dataUri = bgMatch[1]
-    if (!/^data:image\\/(?:png|jpeg|jpg|gif|svg\\+xml);base64,/i.test(dataUri)) continue
+    const rawImageUrl = extractCssImageUrls(style.backgroundImage || '')[0]
+    if (!rawImageUrl) continue
+    const dataUri = /^data:image\\/svg\\+xml;base64,/i.test(rawImageUrl)
+      ? await dataImageToPngDataUri(rawImageUrl, rect.width, rect.height)
+      : await normalizeImageSourceToPptxDataUri(rawImageUrl, rect.width, rect.height)
+    if (!allowedPptxImageDataUri(dataUri)) continue
     if (maxImageDataUriLength > 128 && dataUri.length > maxImageDataUriLength) continue
     if (seenDataUris.has(dataUri)) continue
     seenDataUris.add(dataUri)
@@ -975,7 +1160,7 @@ export const buildHtmlToPptxExtractScript = (options: HtmlToPptxExtractOptions):
     images.push({
       dataUri,
       mimeType:
-        dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif|svg\\+xml));base64,/i)?.[1] || 'image/png',
+        dataUri.match(/^data:(image\\/(?:png|jpeg|jpg|gif));base64,/i)?.[1] || 'image/png',
       x,
       y,
       w,
@@ -1082,6 +1267,24 @@ export const normalizeExtractedHtmlToPptxSlide = (
       const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
       const text = normalizePptxText(String(row.text || '')).slice(0, DEFAULT_MAX_TEXT_CHARS)
       if (!text) return null
+      const bulletRaw =
+        row.bullet && typeof row.bullet === 'object'
+          ? (row.bullet as Record<string, unknown>)
+          : null
+      const bulletType: 'bullet' | 'number' | undefined =
+        bulletRaw?.type === 'bullet' || bulletRaw?.type === 'number' ? bulletRaw.type : undefined
+      const bullet: HtmlToPptxTextBox['bullet'] =
+        bulletType && bulletRaw
+          ? {
+              type: bulletType,
+              level: Number.isFinite(Number(bulletRaw.level))
+                ? clamp(Number(bulletRaw.level), 0, 8)
+                : undefined,
+              startAt: Number.isFinite(Number(bulletRaw.startAt))
+                ? clamp(Number(bulletRaw.startAt), 1, 32767)
+                : undefined
+            }
+          : undefined
       return {
         text,
         x: clamp(Number(row.x) || 0, 0, DEFAULT_SLIDE_WIDTH),
@@ -1106,6 +1309,19 @@ export const normalizeExtractedHtmlToPptxSlide = (
         charSpacing: Number.isFinite(Number(row.charSpacing))
           ? clamp(Number(row.charSpacing), -20, 200)
           : undefined,
+        paragraphSpacingBefore:
+          Number(row.paragraphSpacingBefore) > 0
+            ? clamp(Number(row.paragraphSpacingBefore), 0, 72)
+            : undefined,
+        paragraphSpacingAfter:
+          Number(row.paragraphSpacingAfter) > 0
+            ? clamp(Number(row.paragraphSpacingAfter), 0, 72)
+            : undefined,
+        verticalAlign:
+          row.verticalAlign === 'middle' || row.verticalAlign === 'bottom'
+            ? row.verticalAlign
+            : 'top',
+        bullet,
         wrap: Boolean(row.wrap),
         order: Number.isFinite(Number(row.order)) ? Math.max(0, Number(row.order)) : undefined
       }
@@ -1183,6 +1399,8 @@ export const normalizeExtractedHtmlToPptxSlide = (
   }
 }
 // ========== Write ==========
+
+export { collectEmbeddedFonts } from './font-collect'
 
 export const writeHtmlToPptx = async (
   outputPath: string,

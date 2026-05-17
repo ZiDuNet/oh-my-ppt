@@ -7,7 +7,12 @@ import { nanoid } from 'nanoid'
 import { zipSync } from 'fflate'
 import { PDFDocument } from 'pdf-lib'
 import type { IpcContext } from '../context'
-import { writeHtmlToPptx, type HtmlToPptxSlide } from '../../utils/html-pptx'
+import {
+  writeHtmlToPptx,
+  collectEmbeddedFonts,
+  type HtmlToPptxEmbeddedFont,
+  type HtmlToPptxSlide
+} from '../../utils/html-pptx'
 import {
   captureHtmlPageToPptxImageSlide,
   extractHtmlPageToPptxSlide
@@ -16,6 +21,7 @@ import {
 type PptxExportPayload = {
   sessionId?: unknown
   imageOnly?: unknown
+  embedFonts?: unknown
 }
 
 const parseSessionId = (payload: unknown): string => {
@@ -33,6 +39,15 @@ const parseImageOnly = (payload: unknown): boolean =>
   Boolean(
     payload && typeof payload === 'object' && (payload as PptxExportPayload).imageOnly === true
   )
+
+const parseFontEmbedMode = (payload: unknown): 'auto' | 'always' | 'never' => {
+  if (!payload || typeof payload !== 'object') return 'always'
+  const value = (payload as PptxExportPayload).embedFonts
+  if (value === true || value === 'always') return 'always'
+  if (value === false || value === 'never') return 'never'
+  if (value === 'auto') return 'auto'
+  return 'always'
+}
 
 const sanitizeExportBaseName = (value: string, fallback: string): string =>
   value.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || fallback
@@ -230,13 +245,14 @@ export function registerExportHandlers(ctx: IpcContext): void {
       throw new Error('sessionId 不能为空')
     }
     const imageOnly = parseImageOnly(payload)
+    const fontEmbedMode = imageOnly ? 'never' : parseFontEmbedMode(payload)
 
     const { session, pages, projectDir } = await resolveSessionPageFiles(sessionId)
     const sessionTitle =
       typeof session.title === 'string' && session.title.trim().length > 0
         ? session.title.trim()
         : `ohmyppt-${sessionId}`
-    const prefix = imageOnly ? '【图片版】' : '【可编辑版】'
+    const prefix = imageOnly ? '【Image】' : '【Edit】'
     const sanitizedBaseName = sanitizeExportBaseName(
       `${prefix}${sessionTitle}`,
       `ohmyppt-${sessionId}`
@@ -291,11 +307,45 @@ export function registerExportHandlers(ctx: IpcContext): void {
         }
       }
 
-      await writeHtmlToPptx(saveResult.filePath, {
-        title: sessionTitle,
-        author: 'OhMyPPT',
-        slides
-      })
+      // Collect embedded fonts (editable mode only). The user-facing behavior is
+      // always "try to include fonts"; fallback is internal compatibility handling.
+      let embeddedFonts: HtmlToPptxEmbeddedFont[] = []
+      if (!imageOnly) {
+        try {
+          embeddedFonts = await collectEmbeddedFonts(projectDir, slides, {
+            mode: fontEmbedMode,
+            maxTotalBytes: 20 * 1024 * 1024
+          })
+        } catch (error) {
+          log.warn('[export:pptx] font embedding collection failed, fallback to system fonts', {
+            sessionId,
+            message: error instanceof Error ? error.message : String(error)
+          })
+          warnings.push('字体嵌入失败，已自动改用 PowerPoint 本机字体导出。')
+        }
+      }
+
+      try {
+        await writeHtmlToPptx(saveResult.filePath, {
+          title: sessionTitle,
+          author: 'OhMyPPT',
+          slides,
+          embeddedFonts: embeddedFonts.length > 0 ? embeddedFonts : undefined
+        })
+      } catch (error) {
+        if (embeddedFonts.length === 0) throw error
+        log.warn('[export:pptx] write with embedded fonts failed, retry without fonts', {
+          sessionId,
+          message: error instanceof Error ? error.message : String(error)
+        })
+        warnings.push('字体嵌入写入失败，已自动降级为 PowerPoint 本机字体导出。')
+        embeddedFonts = []
+        await writeHtmlToPptx(saveResult.filePath, {
+          title: sessionTitle,
+          author: 'OhMyPPT',
+          slides
+        })
+      }
       const project = await db.getProject(sessionId)
       if (project?.id) {
         await db.updateProjectStatus(project.id, 'exported')
@@ -306,7 +356,9 @@ export function registerExportHandlers(ctx: IpcContext): void {
         pageCount: slides.length,
         filePath: saveResult.filePath,
         warningCount: warnings.length,
-        imageOnly
+        imageOnly,
+        fontEmbedMode,
+        embeddedFontCount: embeddedFonts.length
       })
       shell.showItemInFolder(saveResult.filePath)
       return {

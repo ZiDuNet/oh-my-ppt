@@ -49,6 +49,8 @@ export const en = {
     fontSchemeAuto: 'Auto match',
     fontSchemeAutoHint: 'AI will choose title and body fonts based on the topic and style.',
     fontSchemeManualHint: 'Uses the selected fonts as title and body fonts.',
+    fontSchemePartialHint:
+      'Choose both title and body fonts to lock the pair; otherwise AI will keep matching fonts automatically.',
     fontPairTitle: 'Title',
     fontPairBody: 'Body',
     fontPairBoth: 'Title/Body',
@@ -283,6 +285,8 @@ export const en = {
     name: 'Name',
     descriptionLabel: 'Description',
     descriptionPlaceholder: 'Describe this style in one sentence',
+    styleCaseLabel: 'Use cases',
+    styleCasePlaceholder: 'Example: tech talks, product launches, education, annual summaries',
     writingTips: 'Style Skill writing tips',
     skillMarkdown: 'Skill Markdown',
     tipStructure:
@@ -469,7 +473,7 @@ Business presentations, product introductions, project summaries — formal but 
     pngExported: 'PNG exported ({count} images)',
     pptxPreparingEditable: 'Preparing editable PPTX',
     pptxPreparingEditableDescription:
-      'Preserving all elements editable where possible, including text, shapes, images, and tables.',
+      'Export may take longer while fonts are embedded. Please wait. Preserving all elements editable where possible, including text, shapes, images, and tables.',
     pptxPreparingImage: 'Preparing image PPTX',
     pptxPreparingImageDescription: 'Each page is exported as a high-resolution image for pixel-perfect fidelity.',
     pptxExported: 'PPTX exported ({count} pages)',

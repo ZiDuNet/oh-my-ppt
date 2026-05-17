@@ -1,6 +1,6 @@
 {
   "name": "oh-my-ppt",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "description": "Oh My PPT - Local-first AI presentation workbench",
   "main": "./out/main/index.js",
   "author": "arcsin1",
@@ -43,6 +43,7 @@
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",
+    "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-progress": "^1.1.1",
     "@radix-ui/react-scroll-area": "^1.2.2",
     "@radix-ui/react-select": "^2.1.4",
@@ -60,6 +61,7 @@
     "electron-log": "^5.4.3",
     "electron-updater": "^6.3.9",
     "fflate": "^0.8.2",
+    "fonteditor-core": "^2.6.3",
     "isomorphic-git": "^1.37.6",
     "katex": "^0.16.45",
     "lucide-react": "^0.574.0",
@@ -74,6 +76,7 @@
     "tiktoken": "^1.0.18",
     "turndown": "^7.2.4",
     "@cfworker/json-schema": "^4.1.1",
+    "woff2-encoder": "^2.0.0",
     "zod": "^4.4.3",
     "zustand": "^5.0.3"
   },

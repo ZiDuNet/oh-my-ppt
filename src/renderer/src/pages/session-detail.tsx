@@ -864,7 +864,9 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }
 
-  const handleExportPptx = async (options?: { imageOnly?: boolean }): Promise<void> => {
+  const handleExportPptx = async (
+    options?: { imageOnly?: boolean; embedFonts?: boolean | 'auto' | 'always' | 'never' }
+  ): Promise<void> => {
     const detailState = useSessionDetailUiStore.getState()
     if (!id || detailState.isExportingPptx) return
     const imageOnly = options?.imageOnly === true

@@ -29,6 +29,14 @@ export interface HtmlToPptxTextBox {
   rotate?: number
   lineSpacing?: number
   charSpacing?: number
+  paragraphSpacingBefore?: number
+  paragraphSpacingAfter?: number
+  verticalAlign?: 'top' | 'middle' | 'bottom'
+  bullet?: {
+    type: 'bullet' | 'number'
+    level?: number
+    startAt?: number
+  }
   wrap?: boolean
   runs?: HtmlToPptxTextRun[]
   order?: number
@@ -115,10 +123,17 @@ export interface HtmlToPptxSlide {
   overlayImages?: HtmlToPptxImage[]
 }
 
+export interface HtmlToPptxEmbeddedFont {
+  fontFace: string
+  style: 'regular' | 'bold' | 'italic' | 'boldItalic'
+  ttfBuffer: Uint8Array
+}
+
 export interface HtmlToPptxDocument {
   title: string
   author?: string
   slides: HtmlToPptxSlide[]
+  embeddedFonts?: HtmlToPptxEmbeddedFont[]
 }
 
 export interface HtmlToPptxExtractOptions {

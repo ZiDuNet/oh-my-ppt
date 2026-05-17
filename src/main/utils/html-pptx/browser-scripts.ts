@@ -387,6 +387,8 @@ export const HIDE_FOR_PPTX_BACKGROUND_SCRIPT = `
     'body::before, body::after { color: transparent !important; -webkit-text-fill-color: transparent !important; -webkit-text-stroke-color: transparent !important; text-shadow: none !important; text-decoration-color: transparent !important; }',
     // Hide katex elements (captured as separate images before background capture)
     '.katex { opacity: 0 !important; visibility: hidden !important; }',
+    // Hide formula blocks (captured as block-level overlay images)
+    '[data-pptx-formula-block] { opacity: 0 !important; visibility: hidden !important; }',
     // Hide SVG text (can't extract it anyway)
     'svg text, svg tspan { fill: transparent !important; stroke: transparent !important; }',
     // Hide input/textarea text
@@ -422,16 +424,69 @@ export const HIDE_ELEMENTS_FOR_PPTX_BACKGROUND_SCRIPT = `
 })()
 `
 
-export const COLLECT_KATEX_RECTS_SCRIPT = `
+export const MARK_KATEX_BLOCKS_SCRIPT = `
+(() => {
+  const root = document.querySelector('.ppt-page-root') || document.body;
+  root.querySelectorAll('[data-pptx-formula-block]').forEach((block) => {
+    block.removeAttribute('data-pptx-formula-block');
+  });
+  const blockSelector = [
+    'p',
+    'div',
+    'section',
+    'article',
+    'main',
+    'aside',
+    'header',
+    'footer',
+    'figure',
+    'figcaption',
+    'li',
+    'ul',
+    'ol',
+    'dl',
+    'dt',
+    'dd',
+    'blockquote',
+    'pre',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'td',
+    'th'
+  ].join(',');
+  const BLOCK_TAGS = new Set(blockSelector.split(',').map((tag) => tag.toUpperCase()));
+  const allBlocks = root.querySelectorAll(blockSelector);
+  let count = 0;
+  for (const block of allBlocks) {
+    // Must contain katex
+    if (!block.querySelector('.katex')) continue;
+    // Check if any direct child block also contains katex — if so, this is a
+    // parent container and the children are the actual leaf targets.
+    let childBlockHasKatex = false;
+    for (const child of block.children) {
+      if (!BLOCK_TAGS.has(child.tagName)) continue;
+      if (child.querySelector('.katex')) { childBlockHasKatex = true; break; }
+    }
+    if (childBlockHasKatex) continue;
+    block.setAttribute('data-pptx-formula-block', '1');
+    count++;
+  }
+  return count;
+})()
+`
+
+export const COLLECT_KATEX_BLOCK_RECTS_SCRIPT = `
 (async () => {
   const root = document.querySelector('.ppt-page-root') || document.body;
   const pageRect = root.getBoundingClientRect();
-  const katexElements = root.querySelectorAll('.katex');
+  const blocks = root.querySelectorAll('[data-pptx-formula-block="1"]');
   const results = [];
-  for (const el of katexElements) {
-    // Only top-level .katex (skip nested inside another .katex)
-    if (el.parentElement?.closest('.katex')) continue;
-    const rect = el.getBoundingClientRect();
+  for (const block of blocks) {
+    const rect = block.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) continue;
     results.push({
       x: Math.round(rect.left - pageRect.left),
