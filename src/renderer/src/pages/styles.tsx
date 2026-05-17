@@ -9,7 +9,7 @@ import {
 } from '../components/ui/Popover'
 import { ipc } from '@renderer/lib/ipc'
 import { useToastStore } from '../store'
-import { Plus, PencilLine, Eye } from 'lucide-react'
+import { Plus, PencilLine, Eye, RefreshCw } from 'lucide-react'
 import { useT } from '../i18n'
 
 type StyleSource = 'builtin' | 'custom' | 'override' | 'cloud'
@@ -38,7 +38,8 @@ export function StylesPage(): React.JSX.Element {
   const navigate = useNavigate()
   const [styles, setStyles] = useState<StyleSummary[]>([])
   const [filter, setFilter] = useState<FilterTab>('all')
-  const { error } = useToastStore()
+  const [syncing, setSyncing] = useState(false)
+  const { error, info } = useToastStore()
   const t = useT()
 
   const loadStyles = useCallback(async (): Promise<void> => {
@@ -52,6 +53,29 @@ export function StylesPage(): React.JSX.Element {
       })
     }
   }, [error, t])
+
+  const handleSyncCloud = async (): Promise<void> => {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      const result = await ipc.syncStylesFromCloud()
+      if (result.added > 0 || result.updated > 0) {
+        info(t('styles.syncSuccess', { added: result.added, updated: result.updated }))
+        await loadStyles()
+      } else {
+        info(t('styles.syncNoChanges'))
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : ''
+      if (msg === 'cloud_url_not_set') {
+        error(t('styles.cloudUrlNotSet'))
+      } else {
+        error(t('styles.syncFailed'), { description: msg || undefined })
+      }
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -69,6 +93,10 @@ export function StylesPage(): React.JSX.Element {
             <h1 className="organic-serif text-[32px] font-semibold leading-none text-[#3e4a32]">{t('styles.title')}</h1>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            <Button size="sm" variant="outline" onClick={() => void handleSyncCloud()} disabled={syncing}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              {t('styles.syncFromCloud')}
+            </Button>
             <Button size="sm" className="min-w-[112px]" onClick={() => navigate('/styles/new')}>
               <Plus className="mr-2 h-4 w-4" />
               {t('styles.newStyle')}
