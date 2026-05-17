@@ -33,7 +33,6 @@ files:
   - '!thumb.png'
   - '!node_modules/tiktoken'
   - '!node_modules/web-streams-polyfill'
-asar: false
 asarUnpack:
   - resources/**
   - node_modules/@node-rs/**/*.node

@@ -105,7 +105,8 @@ export async function resolveVisionModelConfig(
           provider,
           model,
           apiKey,
-          baseUrl: String(config.baseUrl || '').trim()
+          baseUrl: String(config.baseUrl || '').trim(),
+          maxTokens: config.maxTokens ?? 0
         }
       }
     }
@@ -122,7 +123,8 @@ export async function resolveVisionModelConfig(
           provider: String(activeConfig.provider || '').trim(),
           model: visionModelId,
           apiKey,
-          baseUrl: String(activeConfig.baseUrl || '').trim()
+          baseUrl: String(activeConfig.baseUrl || '').trim(),
+          maxTokens: activeConfig.maxTokens ?? 0
         }
       }
     }
