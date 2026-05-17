@@ -92,5 +92,3 @@ publish:
   provider: github
   owner: ZiDuNet
   repo: oh-my-ppt
-electronDownload:
-  mirror: https://npmmirror.com/mirrors/electron/
