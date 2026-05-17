@@ -104,7 +104,8 @@ export async function resolveVisionModelConfig(
           provider,
           model,
           apiKey,
-          baseUrl: String(config.baseUrl || '').trim()
+          baseUrl: String(config.baseUrl || '').trim(),
+          maxTokens: config.maxTokens ?? 0
         }
       }
       log.warn('[vision-model] vision model config incomplete, falling back to active model', { id: visionModelId })
