@@ -12,11 +12,14 @@ import { useToastStore } from '../store'
 import { Plus, PencilLine, Eye } from 'lucide-react'
 import { useT } from '../i18n'
 
+type StyleSource = 'builtin' | 'custom' | 'override' | 'cloud'
+type FilterTab = 'all' | 'builtin' | 'cloud' | 'custom'
+
 type StyleSummary = {
   id: string
   label: string
   description: string
-  source?: 'builtin' | 'custom' | 'override'
+  source?: StyleSource
   editable?: boolean
   category: string
   styleCase?: string
@@ -25,11 +28,16 @@ type StyleSummary = {
   updatedAt?: number
 }
 
+function isBuiltinSource(source?: StyleSource): boolean {
+  return source === 'builtin' || source === 'override'
+}
+
 const localAssetUrl = (filePath: string): string => `local-asset://${encodeURI(filePath)}`
 
 export function StylesPage(): React.JSX.Element {
   const navigate = useNavigate()
   const [styles, setStyles] = useState<StyleSummary[]>([])
+  const [filter, setFilter] = useState<FilterTab>('all')
   const { error } = useToastStore()
   const t = useT()
 
@@ -68,10 +76,39 @@ export function StylesPage(): React.JSX.Element {
           </div>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{t('styles.description')}</p>
+        <div className="mt-3 flex gap-1">
+          {([
+            ['all', t('styles.filterAll')],
+            ['builtin', t('styles.filterBuiltin')],
+            ['cloud', t('styles.filterCloud')],
+            ['custom', t('styles.filterCustom')],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                filter === key
+                  ? 'bg-[#5d6b4d] text-white'
+                  : 'bg-[#e8e0d2] text-[#5a5048] hover:bg-[#d9cfbd]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {styles.map((style) => (
+        {styles
+          .filter((style) => {
+            if (filter === 'all') return true
+            if (filter === 'builtin') return isBuiltinSource(style.source)
+            if (filter === 'cloud') return style.source === 'cloud'
+            if (filter === 'custom') return style.source === 'custom'
+            return true
+          })
+          .map((style) => (
           <Popover key={style.id}>
             <Card className="group !rounded-lg transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(88,75,56,0.18)]">
               <CardHeader className="pb-2">
