@@ -363,19 +363,8 @@ export function createSessionBoundDeckTools(context: SessionDeckGenerationContex
         description: `Report the current generation/editing stage to the host UI. The label and detail must be written in ${statusLanguage}, regardless of the deck content language. progress must be a numeric literal such as 10, not a string such as "10".`,
         schema: z.object({
           label: z.string().describe(`Current stage label in ${statusLanguage}`),
-          detail: z.string().nullable().describe(`Optional extra detail in ${statusLanguage}`),
-          progress: z
-            .preprocess((value) => {
-              if (value === null || value === undefined || value === '') return null
-              if (typeof value === 'string') {
-                const trimmed = value.trim()
-                if (!trimmed) return null
-                const parsed = Number(trimmed)
-                return Number.isFinite(parsed) ? parsed : value
-              }
-              return value
-            }, z.number().min(0).max(100).nullable())
-            .describe('Suggested progress')
+          detail: z.string().nullable().optional().describe(`Optional extra detail in ${statusLanguage}`),
+          progress: z.number().min(0).max(100).nullable().optional().describe('Suggested progress')
         })
       }
     ),

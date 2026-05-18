@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { ipc, type ModelConfig, type ModelInfo, type NewApiLogItem, type NewApiUserInfo } from '@renderer/lib/ipc'
+import { ipc, type ModelConfig, type NewApiUserInfo, type ModelInfo, type NewApiLogItem } from '@renderer/lib/ipc'
 import type { ConfigurableModelTimeoutProfile } from '@shared/model-timeout.js'
 
 interface Settings {
@@ -11,18 +11,46 @@ interface Settings {
   stylesCloudUrl: string
 }
 
+/** NewAPI Token 用量 */
+interface NewApiTokenUsage {
+  name: string
+  usedQuota: number
+  remainQuota: number
+  unlimitedQuota: boolean
+  status: number
+  accessedTime: number
+}
+
+/** NewAPI 订阅信息 */
+interface NewApiSubscriptionItem {
+  id: number
+  planId: number
+  status: string
+  amountTotal: number
+  amountUsed: number
+  startTime: number
+  endTime: number
+}
+
+/** NewAPI 套餐信息 */
+interface NewApiPlan {
+  id: number
+  title: string
+  subtitle: string
+  priceAmount: number
+  currency: string
+  durationUnit: string
+  durationValue: number
+  totalAmount: number
+  enabled: boolean
+}
+
 interface SettingsStore {
   settings: Settings | null
   modelConfigs: ModelConfig[]
   verificationMessage: string | null
   storagePathError: string | null
   loading: boolean
-
-  // NewAPI auth
-  newapiUser: NewApiUserInfo | null
-  newapiLoggedIn: boolean
-  newapiModels: ModelInfo[]
-  newapiLoading: boolean
 
   fetchSettings: () => Promise<void>
   saveSettings: (settings: Partial<Settings>) => Promise<void>
@@ -49,51 +77,25 @@ interface SettingsStore {
   ) => Promise<boolean>
   chooseStoragePath: () => Promise<string | null>
 
-  // NewAPI methods
+  // ---------- NewAPI ----------
+  newapiUser: NewApiUserInfo | null
+  newapiLoggedIn: boolean
+  newapiModels: ModelInfo[]
+  newapiLoading: boolean
+  newapiVerificationMessage: string | null
+  newapiLogs: NewApiLogItem[]
+  newapiTokenUsage: NewApiTokenUsage | null
+  newapiSubscription: NewApiSubscriptionItem[] | null
+  newapiPlans: NewApiPlan[] | null
+
   newapiLogin: (username: string, password: string) => Promise<boolean>
   newapiLogout: () => Promise<void>
   newapiFetchStatus: () => Promise<void>
   newapiFetchModels: () => Promise<void>
-  newapiSetModel: (model: string) => Promise<void>
+  newapiSetModel: (model: string) => Promise<boolean>
   newapiRefreshUser: () => Promise<void>
-  newapiFetchLogs: (page?: number, pageSize?: number) => Promise<void>
+  newapiFetchLogs: () => Promise<void>
   newapiFetchTokenUsage: () => Promise<void>
-
-  // usage data
-  newapiLogs: NewApiLogItem[]
-  newapiLogsTotal: number
-  newapiLogsPage: number
-  newapiTokenUsage: {
-    name: string
-    usedQuota: number
-    remainQuota: number
-    unlimitedQuota: boolean
-    status: number
-    accessedTime: number
-  } | null
-  newapiSubscription: {
-    subscriptions: Array<{
-      id: number
-      planId: number
-      status: string
-      amountTotal: number
-      amountUsed: number
-      startTime: number
-      endTime: number
-    }>
-    billingPreference: string
-  } | null
-  newapiPlans: Array<{
-    id: number
-    title: string
-    subtitle: string
-    priceAmount: number
-    currency: string
-    durationUnit: string
-    durationValue: number
-    totalAmount: number
-    enabled: boolean
-  }>
   newapiFetchSubscription: () => Promise<void>
 }
 
@@ -110,17 +112,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   verificationMessage: null,
   storagePathError: null,
   loading: false,
-
-  newapiUser: null,
-  newapiLoggedIn: false,
-  newapiModels: [],
-  newapiLoading: false,
-  newapiLogs: [],
-  newapiLogsTotal: 0,
-  newapiLogsPage: 0,
-  newapiTokenUsage: null,
-  newapiSubscription: null,
-  newapiPlans: [],
 
   fetchSettings: async () => {
     try {
@@ -251,148 +242,223 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   // ---------- NewAPI ----------
+  newapiUser: null,
+  newapiLoggedIn: false,
+  newapiModels: [],
+  newapiLoading: false,
+  newapiVerificationMessage: null,
+  newapiLogs: [],
+  newapiTokenUsage: null,
+  newapiSubscription: null,
+  newapiPlans: null,
 
   newapiLogin: async (username, password) => {
-    set({ newapiLoading: true, verificationMessage: null })
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       const result = await ipc.newapiLogin({ username, password })
       if (result.success && result.userInfo) {
         set({
           newapiUser: result.userInfo,
           newapiLoggedIn: true,
-          newapiModels: []
+          newapiModels: result.models || [],
+          newapiLoading: false
         })
-        await get().fetchSettings()
-        // 登录后拉取模型列表（不阻塞登录流程）
-        void get().newapiFetchModels()
         return true
       }
-      set({ verificationMessage: result.message || '登录失败。' })
+      set({
+        newapiVerificationMessage: result.message || fallbackMessage('登录失败。', 'Login failed.'),
+        newapiLoading: false
+      })
       return false
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '登录失败。'
-      set({ verificationMessage: message })
+          : fallbackMessage('登录请求失败。', 'Login request failed.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
       return false
-    } finally {
-      set({ newapiLoading: false })
     }
   },
 
   newapiLogout: async () => {
-    set({ verificationMessage: null })
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       await ipc.newapiLogout()
       set({
         newapiUser: null,
         newapiLoggedIn: false,
         newapiModels: [],
+        newapiLogs: [],
+        newapiTokenUsage: null,
+        newapiSubscription: null,
+        newapiPlans: null,
         newapiLoading: false
       })
-      void get().fetchSettings()
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '退出登录失败。'
-      set({ verificationMessage: message, newapiLoading: false })
+          : fallbackMessage('登出失败。', 'Logout failed.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
     }
   },
 
   newapiFetchStatus: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       const result = await ipc.newapiGetStatus()
       set({
         newapiLoggedIn: result.loggedIn,
-        newapiUser: result.userInfo || null
+        newapiUser: result.userInfo || null,
+        newapiLoading: false
       })
-      if (result.loggedIn) {
-        const modelResult = await ipc.newapiGetModels()
-        if (modelResult.success) {
-          set({ newapiModels: modelResult.models || [] })
-        }
-      }
-    } catch {
-      set({ newapiLoggedIn: false, newapiUser: null })
-    }
-  },
-
-  newapiFetchModels: async () => {
-    try {
-      const result = await ipc.newapiGetModels()
-      if (result.success) {
-        set({ newapiModels: result.models || [] })
-      }
-    } catch {
-      // ignore
-    }
-  },
-
-  newapiSetModel: async (model) => {
-    set({ verificationMessage: null })
-    try {
-      await ipc.newapiSetModel({ model })
-      await get().fetchSettings()
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '切换模型失败。'
-      set({ verificationMessage: message })
+          : fallbackMessage('获取状态失败。', 'Failed to get status.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
+    }
+  },
+
+  newapiFetchModels: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
+    try {
+      const result = await ipc.newapiGetModels()
+      if (result.success) {
+        set({ newapiModels: result.models || [], newapiLoading: false })
+      } else {
+        set({
+          newapiVerificationMessage: result.message || fallbackMessage('获取模型失败。', 'Failed to get models.'),
+          newapiLoading: false
+        })
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('获取模型列表失败。', 'Failed to fetch model list.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
+    }
+  },
+
+  newapiSetModel: async (model) => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
+    try {
+      const result = await ipc.newapiSetModel({ model })
+      set({ newapiLoading: false })
+      return result.success
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('设置模型失败。', 'Failed to set model.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
+      return false
     }
   },
 
   newapiRefreshUser: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       const result = await ipc.newapiRefreshUser()
       if (result.success && result.userInfo) {
-        set({ newapiUser: result.userInfo })
+        set({ newapiUser: result.userInfo, newapiLoading: false })
+      } else {
+        set({
+          newapiVerificationMessage: fallbackMessage('刷新用户信息失败。', 'Failed to refresh user info.'),
+          newapiLoading: false
+        })
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('刷新用户信息失败。', 'Failed to refresh user info.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
     }
   },
 
+  /** 并发获取最近 3 天、5 页日志 */
   newapiFetchLogs: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
-      const pageSize = 50
+      // 并发请求 5 页日志
+      const pageSize = 20
       const pages = [0, 1, 2, 3, 4]
+      const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000
       const results = await Promise.all(
-        pages.map((p) => ipc.newapiGetLogs({ page: p, pageSize }))
+        pages.map((page) => ipc.newapiGetLogs({ page, pageSize }))
       )
-      const allItems = results.flatMap((r) => (r.success ? r.items : []))
-      const threeDaysAgo = Math.floor(Date.now() / 1000) - 3 * 24 * 3600
-      const filtered = allItems.filter((item) => item.createdAt >= threeDaysAgo)
-      set({ newapiLogs: filtered, newapiLogsTotal: filtered.length, newapiLogsPage: 0 })
-    } catch {
-      // ignore
+      // 合并所有页的 items，去重（按 id），按时间倒序
+      const allItems = results
+        .filter((r) => r.success)
+        .flatMap((r) => r.items)
+      const uniqueMap = new Map<number, NewApiLogItem>()
+      for (const item of allItems) {
+        if (!uniqueMap.has(item.id)) {
+          uniqueMap.set(item.id, item)
+        }
+      }
+      // 过滤最近 3 天
+      const filtered = Array.from(uniqueMap.values())
+        .filter((item) => item.createdAt * 1000 >= threeDaysAgo)
+        .sort((a, b) => b.createdAt - a.createdAt)
+      set({ newapiLogs: filtered, newapiLoading: false })
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('获取日志失败。', 'Failed to fetch logs.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
     }
   },
 
   newapiFetchTokenUsage: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       const result = await ipc.newapiGetTokenUsage()
       if (result.success && result.usage) {
-        set({ newapiTokenUsage: result.usage })
+        set({ newapiTokenUsage: result.usage, newapiLoading: false })
+      } else {
+        set({
+          newapiTokenUsage: null,
+          newapiLoading: false,
+          newapiVerificationMessage: fallbackMessage('获取用量失败。', 'Failed to get token usage.')
+        })
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('获取用量失败。', 'Failed to get token usage.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
     }
   },
 
   newapiFetchSubscription: async () => {
+    set({ newapiLoading: true, newapiVerificationMessage: null })
     try {
       const result = await ipc.newapiGetSubscription()
       if (result.success) {
         set({
-          newapiSubscription: result.subscription || null,
-          newapiPlans: result.plans || []
+          newapiSubscription: result.subscription?.subscriptions || null,
+          newapiPlans: result.plans || null,
+          newapiLoading: false
+        })
+      } else {
+        set({
+          newapiSubscription: null,
+          newapiPlans: null,
+          newapiLoading: false
         })
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : fallbackMessage('获取订阅信息失败。', 'Failed to get subscription.')
+      set({ newapiVerificationMessage: message, newapiLoading: false })
     }
   }
 }))

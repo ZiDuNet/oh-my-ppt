@@ -10,6 +10,7 @@ import {
   buildEditModeInjectScript,
   buildEditModeSetPreviewScaleScript,
   EDIT_MODE_CONSOLE_PREFIX,
+  type EditableElementSnapshot,
   type EditModeMovePayload,
   type EditSelectionPayload
 } from './edit-mode-script'
@@ -21,6 +22,28 @@ export interface PreviewIframeHandle {
     selector: string,
     patch: { text?: string; style?: { color?: string; fontSize?: string; fontWeight?: string } }
   ) => void
+  applyElementProperties: (
+    selector: string,
+    patch: {
+      style?: {
+        zIndex?: number
+        opacity?: number
+        backgroundColor?: string
+        color?: string
+        fontSize?: string
+        fontWeight?: string
+        objectFit?: string
+      }
+      attrs?: {
+        alt?: string
+        poster?: string
+        controls?: boolean
+        muted?: boolean
+        loop?: boolean
+        autoplay?: boolean
+      }
+    }
+  ) => void
   setElementLayout: (
     selector: string,
     layout: { x?: number; y?: number; width?: number; height?: number }
@@ -30,11 +53,12 @@ export interface PreviewIframeHandle {
   showElement: (selector: string) => void
   applyDragStyle: (
     selector: string,
-    style: { x: number; y: number; width?: number; height?: number }
+    style: { x: number; y: number; width?: number; height?: number; isAbsoluteMode?: boolean }
   ) => void
   applyZIndex: (selector: string, zIndex: number) => void
   copyElement: (selector: string, newBlockId: string) => string | null
   readElementHtml: (selector: string) => Promise<string>
+  readElementSnapshot: (selector: string) => Promise<EditableElementSnapshot | null>
   applyChildUpdates: (
     selector: string,
     childUpdates: Array<{ path: number[]; width?: number; height?: number }>
@@ -139,14 +163,17 @@ export const PreviewIframe = forwardRef<
       : undefined
   const pointerEnabled = inspectable && (inspecting || editMode)
 
-  const ensureAnchoredSelector = async (args: {
+  const ensureAnchoredAnchor = async (args: {
     selector: string
     elementTag?: string
     elementText?: string
     reason: 'inspect' | 'drag' | 'text-edit'
-  }): Promise<string> => {
-    if (!pageHtmlPath || !pageId) return args.selector
-    if (/\[data-block-id=/.test(args.selector)) return args.selector
+  }): Promise<{ selector: string; blockId?: string }> => {
+    if (!pageHtmlPath || !pageId) {
+      throw new Error('Cannot anchor element without page path and page id')
+    }
+    const existingBlockId = args.selector.match(/\[data-block-id="([^"]+)"\]/)?.[1]
+    if (existingBlockId) return { selector: args.selector, blockId: existingBlockId }
     try {
       const result = await ipc.ensureElementAnchor({
         htmlPath: pageHtmlPath,
@@ -156,10 +183,20 @@ export const PreviewIframe = forwardRef<
         elementText: args.elementText,
         reason: args.reason
       })
-      return result.selector || args.selector
+      return { selector: result.selector || args.selector, blockId: result.blockId }
     } catch {
-      return args.selector
+      throw new Error('Failed to anchor selected element')
     }
+  }
+
+  const ensureAnchoredSelector = async (args: {
+    selector: string
+    elementTag?: string
+    elementText?: string
+    reason: 'inspect' | 'drag' | 'text-edit'
+  }): Promise<string> => {
+    const result = await ensureAnchoredAnchor(args)
+    return result.selector
   }
 
   const handleWebviewRef = useCallback((node: Electron.WebviewTag | null): void => {
@@ -204,6 +241,35 @@ export const PreviewIframe = forwardRef<
           `if (window.__pptEditModeLiveUpdate) window.__pptEditModeLiveUpdate(${JSON.stringify(selector)}, ${JSON.stringify(patch)});`
         )
       },
+      applyElementProperties(
+        selector: string,
+        patch: {
+          style?: {
+            zIndex?: number
+            opacity?: number
+            backgroundColor?: string
+            color?: string
+            fontSize?: string
+            fontWeight?: string
+            objectFit?: string
+          }
+          attrs?: {
+            alt?: string
+            poster?: string
+            controls?: boolean
+            muted?: boolean
+            loop?: boolean
+            autoplay?: boolean
+          }
+        }
+      ): void {
+        const wv = webviewRef.current
+        if (!wv) return
+        safeExecuteJavaScript(
+          wv,
+          `if (window.__pptEditModeApplyProperties) window.__pptEditModeApplyProperties(${JSON.stringify(selector)}, ${JSON.stringify(patch)});`
+        )
+      },
       setElementLayout(
         selector: string,
         layout: { x?: number; y?: number; width?: number; height?: number }
@@ -241,21 +307,38 @@ export const PreviewIframe = forwardRef<
       },
       applyDragStyle(
         selector: string,
-        style: { x: number; y: number; width?: number; height?: number }
+        style: { x: number; y: number; width?: number; height?: number; isAbsoluteMode?: boolean }
       ): void {
         const wv = webviewRef.current
         if (!wv) return
+        if (style.isAbsoluteMode) {
+          safeExecuteJavaScript(
+            wv,
+            `var __el = document.querySelector(${JSON.stringify(selector)}); if (!__el) return;` +
+              `__el.style.position = 'absolute';` +
+              `if (!__el.style.zIndex) __el.style.zIndex = '10';` +
+              `__el.style.left = ${JSON.stringify(style.x + 'px')};` +
+              `__el.style.top = ${JSON.stringify(style.y + 'px')};` +
+              `__el.style.translate = '';` +
+              `__el.style.removeProperty('--ppt-drag-x');` +
+              `__el.style.removeProperty('--ppt-drag-y');` +
+              `__el.setAttribute('data-ppt-layout-converted', '1');` +
+              (style.width != null ? `__el.style.width = ${JSON.stringify(style.width + 'px')};` : '') +
+              (style.height != null ? `__el.style.height = ${JSON.stringify(style.height + 'px')};` : '')
+          )
+          return
+        }
         safeExecuteJavaScript(
           wv,
           `var __el = document.querySelector(${JSON.stringify(selector)}); if (!__el) return;` +
-          `var __pos = __el.style.position || getComputedStyle(__el).position;` +
-          `if (!__pos || __pos === 'static') __el.style.position = 'relative';` +
-          `if (!__el.style.zIndex) __el.style.zIndex = '10';` +
-          `__el.style.setProperty('--ppt-drag-x', ${JSON.stringify(style.x + 'px')});` +
-          `__el.style.setProperty('--ppt-drag-y', ${JSON.stringify(style.y + 'px')});` +
-          `__el.style.translate = 'var(--ppt-drag-x, 0px) var(--ppt-drag-y, 0px)';` +
-          (style.width != null ? `__el.style.width = ${JSON.stringify(style.width + 'px')};` : '') +
-          (style.height != null ? `__el.style.height = ${JSON.stringify(style.height + 'px')};` : '')
+            `var __pos = __el.style.position || getComputedStyle(__el).position;` +
+            `if (!__pos || __pos === 'static') __el.style.position = 'relative';` +
+            `if (!__el.style.zIndex) __el.style.zIndex = '10';` +
+            `__el.style.setProperty('--ppt-drag-x', ${JSON.stringify(style.x + 'px')});` +
+            `__el.style.setProperty('--ppt-drag-y', ${JSON.stringify(style.y + 'px')});` +
+            `__el.style.translate = 'var(--ppt-drag-x, 0px) var(--ppt-drag-y, 0px)';` +
+            (style.width != null ? `__el.style.width = ${JSON.stringify(style.width + 'px')};` : '') +
+            (style.height != null ? `__el.style.height = ${JSON.stringify(style.height + 'px')};` : '')
         )
       },
       applyZIndex(selector: string, zIndex: number): void {
@@ -327,6 +410,19 @@ export const PreviewIframe = forwardRef<
           )) || ''
         } catch {
           return ''
+        }
+      },
+      async readElementSnapshot(selector: string): Promise<EditableElementSnapshot | null> {
+        const wv = webviewRef.current
+        if (!wv) return null
+        try {
+          return (
+            (await wv.executeJavaScript(
+              `window.__pptEditModeReadSnapshot ? window.__pptEditModeReadSnapshot(${JSON.stringify(selector)}) : null`
+            )) || null
+          )
+        } catch {
+          return null
         }
       },
       applyChildUpdates(
@@ -459,14 +555,21 @@ export const PreviewIframe = forwardRef<
         const parsed = JSON.parse(raw) as {
           type?: string
           selector?: string
+          blockId?: string
           label?: string
           elementTag?: string
           elementText?: string
+          kind?: EditSelectionPayload['kind']
+          capabilities?: EditSelectionPayload['capabilities']
+          snapshot?: EditSelectionPayload['snapshot']
           isText?: boolean
+          layoutMode?: EditModeMovePayload['layoutMode']
           x?: number
           y?: number
           deltaX?: number
           deltaY?: number
+          visualX?: number
+          visualY?: number
           width?: number
           height?: number
           scale?: number
@@ -506,17 +609,27 @@ export const PreviewIframe = forwardRef<
         // Edit mode: element selected (click)
         if (isEditModeMessage && parsed.type === 'selected' && parsed.selector) {
           void (async () => {
-            const anchoredSelector = await ensureAnchoredSelector({
+            const anchor = await ensureAnchoredAnchor({
               selector: parsed.selector || '',
               elementTag: parsed.elementTag,
               elementText: parsed.elementText,
               reason: 'drag'
             })
             onElementSelectedRef.current?.({
-              selector: anchoredSelector,
-              label: anchoredSelector,
+              selector: anchor.selector,
+              blockId: anchor.blockId || parsed.blockId,
+              label: anchor.selector,
               elementTag: parsed.elementTag || '',
               elementText: parsed.elementText || '',
+              kind: parsed.kind,
+              capabilities: parsed.capabilities,
+              snapshot: parsed.snapshot
+                ? {
+                    ...parsed.snapshot,
+                    selector: anchor.selector,
+                    blockId: anchor.blockId || parsed.snapshot.blockId || parsed.blockId
+                  }
+                : parsed.snapshot,
               isText: Boolean(parsed.isText),
               text: typeof parsed.text === 'string' ? parsed.text : '',
               style: parsed.style || {},
@@ -533,21 +646,21 @@ export const PreviewIframe = forwardRef<
         // Edit mode: pre-anchor request
         if (isEditModeMessage && parsed.type === 'pre-anchor' && parsed.selector) {
           void (async () => {
-            let anchorResult: string = parsed.selector || ''
+            let anchorResult: { selector: string; blockId?: string }
             try {
-              anchorResult = await ensureAnchoredSelector({
+              anchorResult = await ensureAnchoredAnchor({
                 selector: parsed.selector || '',
                 elementTag: parsed.elementTag,
                 reason: 'drag'
               })
             } catch {
-              /* fallback to temp selector */
+              return
             }
             const wv = webviewRef.current
             if (wv) {
               safeExecuteJavaScript(
                 wv,
-                `if (window.__pptResolveEditModeAnchor) window.__pptResolveEditModeAnchor(${JSON.stringify({ selector: anchorResult })});`
+                `if (window.__pptResolveEditModeAnchor) window.__pptResolveEditModeAnchor(${JSON.stringify(anchorResult)});`
               )
             }
           })().catch(() => {})
@@ -557,19 +670,23 @@ export const PreviewIframe = forwardRef<
         // Edit mode: element moved/resized
         if (isEditModeMessage && parsed.type === 'moved' && parsed.selector) {
           void (async () => {
-            const anchoredSelector = await ensureAnchoredSelector({
+            const anchor = await ensureAnchoredAnchor({
               selector: parsed.selector || '',
               elementTag: parsed.elementTag,
               reason: 'drag'
             })
             onElementMovedRef.current?.({
-              selector: anchoredSelector,
-              label: anchoredSelector,
+              selector: anchor.selector,
+              blockId: anchor.blockId || parsed.blockId,
+              label: anchor.selector,
               elementTag: parsed.elementTag || '',
+              layoutMode: parsed.layoutMode,
               x: Number(parsed.x || 0),
               y: Number(parsed.y || 0),
               deltaX: Number(parsed.deltaX || 0),
               deltaY: Number(parsed.deltaY || 0),
+              visualX: parsed.visualX === undefined ? undefined : Number(parsed.visualX),
+              visualY: parsed.visualY === undefined ? undefined : Number(parsed.visualY),
               width: parsed.width === undefined ? undefined : Number(parsed.width),
               height: parsed.height === undefined ? undefined : Number(parsed.height),
               scale: parsed.scale === undefined ? undefined : Number(parsed.scale),

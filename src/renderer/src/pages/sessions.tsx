@@ -4,7 +4,8 @@ import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Input } from '../components/ui/Input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Dialog'
-import { FileText, FileUp, FolderOpen, Loader2, MessageSquare, Pencil, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/Tooltip'
+import { FileArchive, FileText, FileUp, FolderOpen, Loader2, MessageSquare, Pencil, Sparkles, Trash2, X, type LucideIcon } from 'lucide-react'
 import { type Session, useSessionStore } from '../store'
 import { useToastStore } from '../store'
 import { getEditorGate, parseSessionMetadata } from '../lib/sessionMetadata'
@@ -18,10 +19,17 @@ dayjs.extend(duration)
 
 const getSourceTag = (
   session: Session,
-  labels: { pptx: string; document: string; ai: string }
+  labels: { pptx: string; sessionFile: string; document: string; ai: string }
 ): { label: string; Icon: LucideIcon; className: string } => {
   const metadata = parseSessionMetadata(session.metadata)
   const source = typeof metadata.source === 'string' ? metadata.source : ''
+  if (source === 'session-file-import' || session.model === 'session-file-import') {
+    return {
+      label: labels.sessionFile,
+      Icon: FileArchive,
+      className: 'border-[#c7c2df]/80 bg-[#f3f0ff] text-[#5d5684]'
+    }
+  }
   if (source === 'pptx-import' || session.provider === 'import' || session.model === 'pptx-import') {
     return {
       label: labels.pptx,
@@ -45,7 +53,7 @@ const getSourceTag = (
 
 export function SessionsPage(): React.JSX.Element {
   const navigate = useNavigate()
-  const { sessions, fetchSessions, deleteSession, updateSessionTitle } = useSessionStore()
+  const { sessions, fetchSessions, deleteSession, updateSessionTitle, importSessionFile } = useSessionStore()
   const { success, error } = useToastStore()
   const t = useT()
   const [renameSession, setRenameSession] = useState<Session | null>(null)
@@ -53,59 +61,24 @@ export function SessionsPage(): React.JSX.Element {
   const [renaming, setRenaming] = useState(false)
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<Session | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [importingSession, setImportingSession] = useState(false)
 
   useEffect(() => {
     void fetchSessions()
   }, [fetchSessions])
 
-  // 追踪正在生成的会话 ID
-  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set())
-
-  // 挂载时主动检查哪些会话有正在进行的生成任务
-  useEffect(() => {
-    const checkActive = async (): Promise<void> => {
-      const nonCompleted = sessions.filter((s) => s.status !== 'completed')
-      if (nonCompleted.length === 0) return
-      const activeIds = new Set<string>()
-      await Promise.all(
-        nonCompleted.map(async (s) => {
-          try {
-            const state = await ipc.getGenerateState(s.id)
-            if (state?.hasActiveRun) activeIds.add(s.id)
-          } catch { /* ignore */ }
-        })
-      )
-      if (activeIds.size > 0) setGeneratingIds(activeIds)
-    }
-    void checkActive()
-  }, [sessions])
-
-  // 实时追踪生成事件
+  // 实时追踪生成事件，生成结束后刷新会话列表
   useEffect(() => {
     const handler = (event: GenerateChunkEvent): void => {
       const sid = event.payload?.sessionId
       if (!sid) return
       if (event.type === 'run_completed' || event.type === 'run_error') {
-        setGeneratingIds((prev) => {
-          if (!prev.has(sid)) return prev
-          const next = new Set(prev)
-          next.delete(sid)
-          return next
-        })
-        // 生成结束后刷新会话列表（更新页数等信息）
         void fetchSessions()
-      } else {
-        setGeneratingIds((prev) => {
-          if (prev.has(sid)) return prev
-          const next = new Set(prev)
-          next.add(sid)
-          return next
-        })
       }
     }
     const unsubscribe = ipc.onGenerateChunk(handler)
     return () => { unsubscribe?.() }
-  }, [])
+  }, [fetchSessions])
 
   const sortedSessions = sessions
   const canEnterEditor = (session: {
@@ -176,6 +149,26 @@ export function SessionsPage(): React.JSX.Element {
     }
   }
 
+  const handleImportSessionFile = async (): Promise<void> => {
+    setImportingSession(true)
+    try {
+      const result = await importSessionFile()
+      if (result.cancelled) return
+      success(t('sessions.importDone'), {
+        description: t('sessions.importedDescription', {
+          title: result.title || t('sessions.importedFallbackTitle'),
+          pageCount: result.pageCount || 0
+        })
+      })
+    } catch (err) {
+      error(t('sessions.importFailed'), {
+        description: err instanceof Error ? err.message : t('common.retryLater')
+      })
+    } finally {
+      setImportingSession(false)
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-6xl p-6">
       <div className="mb-6">
@@ -185,6 +178,19 @@ export function SessionsPage(): React.JSX.Element {
             <h1 className="organic-serif text-[32px] font-semibold leading-none text-[#3e4a32]">{t('sessions.title')}</h1>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            <TooltipProvider delayDuration={180}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" variant="outline" className="min-w-[132px]" onClick={() => void handleImportSessionFile()} disabled={importingSession}>
+                    <FileArchive className="mr-2 h-4 w-4" />
+                    {importingSession ? t('sessions.importing') : t('sessions.importSessionFile')}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="end" className="whitespace-pre-line">
+                  {t('sessions.importSessionFileTooltip')}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Button size="sm" className="min-w-[112px]" onClick={() => navigate('/')}>
               <FolderOpen className="mr-2 h-4 w-4" />
               {t('sessions.newSession')}
@@ -224,6 +230,7 @@ export function SessionsPage(): React.JSX.Element {
                 : t('sessions.actionRegenerate')
             const sourceTag = getSourceTag(session, {
               pptx: t('sessions.sourcePptx'),
+              sessionFile: t('sessions.sourceSessionFile'),
               document: t('sessions.sourceDocument'),
               ai: t('sessions.sourceAi')
             })

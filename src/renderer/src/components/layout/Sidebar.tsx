@@ -90,7 +90,7 @@ export function Sidebar(): React.JSX.Element {
           <img src={logoUrl} alt="Oh My PPT" className="h-14 w-14 select-none" draggable={false} />
           <h1 className="organic-serif text-[22px] font-semibold leading-none text-[#3e4a32]">Oh My PPT</h1>
         </div>
-        <p className="mt-1 text-xs text-[#7f876e] px-4">{t('nav.tagline')}</p>
+        <p className="mt-1 text-[14px] text-[#7f876e] px-4">{t('nav.tagline')}</p>
         {/* 当前模型 */}
         {newapiLoggedIn && activeModelName && (
           <div className="mt-1.5 space-y-0.5 px-4 text-[10px]">
@@ -171,7 +171,7 @@ export function Sidebar(): React.JSX.Element {
                     {newapiUser.displayName || newapiUser.username}
                   </span>
                   {(() => {
-                    const sub = newapiSubscription?.subscriptions?.[0]
+                    const sub = newapiSubscription?.[0]
                     if (sub?.status === 'active') {
                       return (
                         <span className="ml-auto shrink-0 rounded-full bg-[#a8d98a]/30 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-[#d4f5b8]">
@@ -188,8 +188,8 @@ export function Sidebar(): React.JSX.Element {
                 </div>
                 {/* 套餐/余额信息 */}
                 {(() => {
-                  const sub = newapiSubscription?.subscriptions?.[0]
-                  const plan = sub ? newapiPlans.find((p) => p.id === sub.planId) : null
+                  const sub = newapiSubscription?.[0]
+                  const plan = sub ? newapiPlans?.find((p) => p.id === sub.planId) : null
                   if (sub) {
                     return (
                       <div className="relative mt-2 space-y-1">

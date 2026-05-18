@@ -281,7 +281,7 @@ export function FontsPage(): React.JSX.Element {
             </Button>
           </div>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-[12px] text-muted-foreground">
           {t('fonts.description')}
         </p>
       </div>

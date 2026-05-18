@@ -32,7 +32,7 @@ function isBuiltinSource(source?: StyleSource): boolean {
   return source === 'builtin' || source === 'override'
 }
 
-const localAssetUrl = (filePath: string): string => `local-asset://${encodeURI(filePath)}`
+const localAssetUrl = (filePath: string): string => `local-asset://${encodeURIComponent(filePath)}`
 
 export function StylesPage(): React.JSX.Element {
   const navigate = useNavigate()
@@ -103,7 +103,7 @@ export function StylesPage(): React.JSX.Element {
             </Button>
           </div>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">{t('styles.description')}</p>
+        <p className="mt-2 text-[12px] text-muted-foreground">{t('styles.description')}</p>
         <div className="mt-3 flex gap-1">
           {([
             ['all', t('styles.filterAll')],
@@ -186,12 +186,13 @@ export function StylesPage(): React.JSX.Element {
                 side="right"
                 align="start"
                 sideOffset={12}
-                className="overflow-hidden rounded-lg p-0"
+                className="w-auto overflow-hidden rounded-lg border border-[#d8cfbc]/80 bg-[#fffaf0] p-2 shadow-[0_18px_44px_rgba(64,52,38,0.22)] data-[state=closed]:animate-none data-[state=open]:animate-none"
               >
-                <div className="aspect-video w-[520px] max-w-[72vw] bg-black">
+                <div className="relative aspect-video w-[380px] overflow-hidden rounded-md border border-[#e3dac8] bg-white">
                   <iframe
                     src={localAssetUrl(style.previewPath)}
-                    className="block h-full w-full border-0"
+                    className="absolute left-0 top-0 h-[900px] w-[1600px] origin-top-left border-0 bg-white"
+                    style={{ transform: 'scale(0.2375)' }}
                     title={`${style.label} preview`}
                   />
                 </div>

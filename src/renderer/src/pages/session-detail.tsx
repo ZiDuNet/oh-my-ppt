@@ -52,7 +52,41 @@ const EMPTY_ELEMENT_DRAFT: ElementEditDraft = {
   layoutY: '',
   layoutWidth: '',
   layoutHeight: '',
-  layoutZIndex: ''
+  layoutZIndex: '',
+  opacity: '1',
+  backgroundColor: '#ffffff',
+  objectFit: 'contain',
+  alt: '',
+  poster: '',
+  controls: false,
+  muted: false,
+  loop: false,
+  autoplay: false
+}
+
+type ElementPropertyStylePatch = {
+  zIndex?: number
+  opacity?: number
+  backgroundColor?: string
+  color?: string
+  fontSize?: string
+  fontWeight?: string
+  objectFit?: string
+}
+
+type ElementPropertyAttrsPatch = {
+  alt?: string
+  poster?: string
+  controls?: boolean
+  muted?: boolean
+  loop?: boolean
+  autoplay?: boolean
+}
+
+type ElementPropertyPatch = {
+  text?: string
+  style?: ElementPropertyStylePatch
+  attrs?: ElementPropertyAttrsPatch
 }
 
 function normalizePagesForSelection(
@@ -101,6 +135,11 @@ function normalizeFontWeight(value: string | undefined): string {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return value === 'bold' ? '700' : '400'
   return String(Math.max(300, Math.min(800, Math.round(parsed / 100) * 100)))
+}
+
+function opacityToInput(value: string | undefined): string {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? String(Math.max(0, Math.min(1, parsed))) : '1'
 }
 
 export function SessionDetailPage(): React.JSX.Element {
@@ -939,18 +978,48 @@ export function SessionDetailPage(): React.JSX.Element {
     }
   }
 
+  const handleExportSessionZip = async (): Promise<void> => {
+    const detailState = useSessionDetailUiStore.getState()
+    if (!id || detailState.isExportingSessionZip) return
+    detailState.setIsExportingSessionZip(true)
+    toastInfo(t('sessionDetail.sessionZipPreparing'), {
+      description: t('sessionDetail.sessionZipPreparingDescription'),
+      duration: 4000
+    })
+    try {
+      const result = await ipc.exportSessionZip(id)
+      if (result.cancelled) {
+        toastInfo(t('sessionDetail.exportCancelled'))
+        return
+      }
+      if (!result.success || !result.path) {
+        toastError(t('sessionDetail.exportFailed'))
+        return
+      }
+      toastSuccess(t('sessionDetail.sessionZipExported'), {
+        description: t('sessionDetail.sessionZipExportedDescription')
+      })
+    } catch (error) {
+      toastError(error instanceof Error ? error.message : t('sessionDetail.exportFailed'))
+    } finally {
+      useSessionDetailUiStore.getState().setIsExportingSessionZip(false)
+    }
+  }
+
   const handleElementMoved = (payload: EditModeMovePayload): void => {
     if (!id || !selectedPage?.htmlPath || !selectedPage.pageId) return
 
     // Sync inspector panel layout fields when the selected element is dragged
     // payload.x/y are translate offsets (--ppt-drag-x/y), convert to visual position for display
     if (textSelection && payload.selector === textSelection.selector) {
-      const originalCSSX =
-        (textSelection.bounds?.x ?? 0) - (textSelection.translateX ?? 0)
-      const originalCSSY =
-        (textSelection.bounds?.y ?? 0) - (textSelection.translateY ?? 0)
-      const visualX = originalCSSX + payload.x
-      const visualY = originalCSSY + payload.y
+      const visualX =
+        payload.visualX ??
+        ((textSelection.pageBounds?.x ?? textSelection.bounds?.x ?? 0) +
+          (payload.layoutMode === 'translate' ? payload.x : payload.deltaX))
+      const visualY =
+        payload.visualY ??
+        ((textSelection.pageBounds?.y ?? textSelection.bounds?.y ?? 0) +
+          (payload.layoutMode === 'translate' ? payload.y : payload.deltaY))
       setTextDraft((prev) => ({
         ...prev,
         layoutX: String(Math.round(visualX)),
@@ -969,7 +1038,7 @@ export function SessionDetailPage(): React.JSX.Element {
       width: payload.width ?? null,
       height: payload.height ?? null,
       childUpdates: payload.childUpdates ?? [],
-      isAbsoluteMode: false,
+      isAbsoluteMode: payload.layoutMode === 'absolute',
       zIndex: parseInt(textDraft.layoutZIndex, 10) || undefined
     }
     editHistory.upsertDragEdit(nextEdit)
@@ -978,10 +1047,12 @@ export function SessionDetailPage(): React.JSX.Element {
   // Unified save: persist both drag edits and text edits for the current page
   const handleSaveAllEdits = async (): Promise<void> => {
     if (!id || !selectedPage?.pageId || !selectedPage.htmlPath) return
+    commitCurrentElementEdit()
     const snapshot = editHistory.getSnapshotForPage(selectedPage.pageId)
     const hasEdits =
       snapshot.dragEdits.length > 0 ||
       snapshot.textEdits.length > 0 ||
+      snapshot.propertyEdits.length > 0 ||
       snapshot.deletes.length > 0 ||
       snapshot.addElements.length > 0
     if (!hasEdits) {
@@ -1014,16 +1085,19 @@ export function SessionDetailPage(): React.JSX.Element {
       const deletedSelectors = new Set(snapshot.deletes.map((d) => d.selector))
       const safeDragEdits = snapshot.dragEdits.filter((e) => !deletedSelectors.has(e.selector))
       const safeTextEdits = snapshot.textEdits.filter((e) => !deletedSelectors.has(e.selector))
+      const safePropertyEdits = snapshot.propertyEdits.filter((e) => !deletedSelectors.has(e.selector))
       // Build descriptive prompt for history
       const parts: string[] = []
       const ac = snapshot.addElements.length
       const dc = snapshot.deletes.length
       const rc = safeDragEdits.length
       const tc = safeTextEdits.length
+      const pc = safePropertyEdits.length
       if (ac > 0) parts.push(`添加 ${ac} 个元素`)
       if (dc > 0) parts.push(`删除 ${dc} 个元素`)
       if (rc > 0) parts.push(`调整 ${rc} 个元素位置`)
       if (tc > 0) parts.push(`编辑 ${tc} 个元素文字`)
+      if (pc > 0) parts.push(`编辑 ${pc} 个元素属性`)
       const prompt = parts.join('、') || '手动调整'
       const result = await ipc.saveEditBatch({
         sessionId: id,
@@ -1031,6 +1105,7 @@ export function SessionDetailPage(): React.JSX.Element {
         pageId: selectedPage.pageId,
         dragEdits: safeDragEdits,
         textEdits: safeTextEdits,
+        propertyEdits: safePropertyEdits,
         deletes: snapshot.deletes,
         addElements: filledAddElements,
         prompt
@@ -1043,7 +1118,12 @@ export function SessionDetailPage(): React.JSX.Element {
       useSessionDetailUiStore.getState().bumpThumbnailVersion(selectedPage.pageId)
       setPreviewRefreshKey((key) => key + 1)
       useSessionDetailUiStore.getState().setInteractionMode('preview')
-      const totalCount = result.dragCount + result.textCount + result.deleteCount + result.addCount
+      const totalCount =
+        result.dragCount +
+        result.textCount +
+        (result.propertyCount || 0) +
+        result.deleteCount +
+        result.addCount
       toastSuccess(t('sessionDetail.adjustmentsSaved', { count: totalCount }))
     } catch (error) {
       toastError(error instanceof Error ? error.message : t('sessionDetail.layoutSaveFailed'))
@@ -1055,7 +1135,11 @@ export function SessionDetailPage(): React.JSX.Element {
   const handleDiscardAllEdits = (): void => {
     if (!selectedPage?.pageId) return
     const snapshot = editHistory.getSnapshotForPage(selectedPage.pageId)
-    const hadPending = snapshot.dragEdits.length > 0 || snapshot.textEdits.length > 0 || snapshot.deletes.length > 0
+    const hadPending =
+      snapshot.dragEdits.length > 0 ||
+      snapshot.textEdits.length > 0 ||
+      snapshot.propertyEdits.length > 0 ||
+      snapshot.deletes.length > 0
     editHistory.clearPage(selectedPage.pageId)
     previewIframeRef.current?.clearEditModeSelection()
     setTextSelection(null)
@@ -1081,9 +1165,9 @@ export function SessionDetailPage(): React.JSX.Element {
 
   const handleDeleteBySelector = (selector: string): void => {
     if (!selectedPage?.htmlPath || !selectedPage.pageId || !selector) return
-    // Commit any pending text edit for the element being deleted
+    // Commit any pending inspector edit for the element being deleted.
     if (textSelection && textSelection.selector === selector) {
-      commitCurrentTextEdit()
+      commitCurrentElementEdit()
     }
     editHistory.addDelete({
       pageId: selectedPage.pageId,
@@ -1097,59 +1181,221 @@ export function SessionDetailPage(): React.JSX.Element {
   }
 
   const handleElementSelected = (payload: EditSelectionPayload): void => {
-    // Commit previous edit before switching to new element
-    commitCurrentTextEdit()
+    // Commit previous edit before switching to new element.
+    commitCurrentElementEdit()
+    if (!payload.snapshot) {
+      setTextSelection(null)
+      setTextDraft(EMPTY_ELEMENT_DRAFT)
+      return
+    }
     setTextSelection(payload)
     const zValue = payload.zIndex !== undefined ? String(payload.zIndex) : '10'
+    const bounds = payload.snapshot.metrics.page
+    const computed = payload.snapshot.computed
+    const attrs = payload.snapshot.attrs
     if (payload.isText) {
       setTextDraft({
         text: payload.text,
-        color: rgbToHex(payload.style.color),
-        fontSize: fontSizeToNumber(payload.style.fontSize),
-        fontWeight: normalizeFontWeight(payload.style.fontWeight),
-        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
-        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
-        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
-        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : '',
-        layoutZIndex: zValue
+        color: rgbToHex(computed.color),
+        fontSize: fontSizeToNumber(computed.fontSize),
+        fontWeight: normalizeFontWeight(computed.fontWeight),
+        layoutX: String(Math.round(bounds.x)),
+        layoutY: String(Math.round(bounds.y)),
+        layoutWidth: String(Math.round(bounds.width)),
+        layoutHeight: String(Math.round(bounds.height)),
+        layoutZIndex: zValue,
+        opacity: opacityToInput(computed.opacity),
+        backgroundColor: rgbToHex(computed.backgroundColor),
+        objectFit: computed.objectFit || 'contain',
+        alt: attrs.alt || '',
+        poster: attrs.poster || '',
+        controls: Boolean(attrs.controls),
+        muted: Boolean(attrs.muted),
+        loop: Boolean(attrs.loop),
+        autoplay: Boolean(attrs.autoplay)
       })
     } else {
       setTextDraft({
         ...EMPTY_ELEMENT_DRAFT,
-        layoutX: payload.bounds ? String(Math.round(payload.bounds.x)) : '',
-        layoutY: payload.bounds ? String(Math.round(payload.bounds.y)) : '',
-        layoutWidth: payload.bounds ? String(Math.round(payload.bounds.width)) : '',
-        layoutHeight: payload.bounds ? String(Math.round(payload.bounds.height)) : '',
-        layoutZIndex: zValue
+        layoutX: String(Math.round(bounds.x)),
+        layoutY: String(Math.round(bounds.y)),
+        layoutWidth: String(Math.round(bounds.width)),
+        layoutHeight: String(Math.round(bounds.height)),
+        layoutZIndex: zValue,
+        opacity: opacityToInput(computed.opacity),
+        backgroundColor: rgbToHex(computed.backgroundColor),
+        objectFit: computed.objectFit || 'contain',
+        alt: attrs.alt || '',
+        poster: attrs.poster || '',
+        controls: Boolean(attrs.controls),
+        muted: Boolean(attrs.muted),
+        loop: Boolean(attrs.loop),
+        autoplay: Boolean(attrs.autoplay)
       })
     }
   }
 
-  const handleTextDraftChange = (draft: ElementEditDraft): void => {
-    // Detect z-index change and persist as a drag edit
-    if (
-      textSelection &&
-      selectedPage?.htmlPath &&
-      selectedPage?.pageId &&
-      draft.layoutZIndex !== textDraft.layoutZIndex
-    ) {
-      const zNum = parseInt(draft.layoutZIndex, 10)
-      if (Number.isFinite(zNum)) {
-        editHistory.upsertDragEdit({
-          pageId: selectedPage.pageId,
-          htmlPath: selectedPage.htmlPath,
-          selector: textSelection.selector,
-          x: textSelection.translateX ?? 0,
-          y: textSelection.translateY ?? 0,
-          width: textSelection.bounds?.width ?? null,
-          height: textSelection.bounds?.height ?? null,
-          childUpdates: [],
-          isAbsoluteMode: false,
-          zIndex: zNum,
-          zIndexOnly: true
-        })
-      }
+  const getCommitFieldsForSelection = (
+    selection: EditSelectionPayload
+  ): Set<keyof ElementEditDraft> => {
+    const fields = new Set<keyof ElementEditDraft>()
+    const capabilities = selection.capabilities || []
+    if (capabilities.includes('layer')) fields.add('layoutZIndex')
+    if (capabilities.includes('appearance')) {
+      fields.add('opacity')
+      fields.add('backgroundColor')
     }
+    if (capabilities.includes('media')) {
+      fields.add('objectFit')
+      fields.add('alt')
+      fields.add('poster')
+      fields.add('controls')
+      fields.add('muted')
+      fields.add('loop')
+      fields.add('autoplay')
+    }
+    if (capabilities.includes('text')) {
+      fields.add('text')
+      fields.add('color')
+      fields.add('fontSize')
+      fields.add('fontWeight')
+    }
+    return fields
+  }
+
+  const buildElementPropertyPatch = (
+    draft: ElementEditDraft,
+    fields?: Array<keyof ElementEditDraft>
+  ): ElementPropertyPatch | null => {
+    if (!textSelection?.snapshot) return null
+
+    const commitFields =
+      fields && fields.length > 0 ? new Set(fields) : getCommitFieldsForSelection(textSelection)
+    const initial = textSelection.snapshot
+    const style: ElementPropertyStylePatch = {}
+    const attrs: ElementPropertyAttrsPatch = {}
+    let text: string | undefined
+
+    if (commitFields.has('layoutZIndex')) {
+      const value = parseInt(draft.layoutZIndex, 10)
+      const initialValue = textSelection.zIndex ?? 10
+      if (Number.isFinite(value) && value !== initialValue) style.zIndex = value
+    }
+    if (commitFields.has('opacity')) {
+      const value = Number(draft.opacity)
+      const initialValue = Number(opacityToInput(initial.computed.opacity))
+      if (Number.isFinite(value) && value !== initialValue) style.opacity = value
+    }
+    if (
+      commitFields.has('backgroundColor') &&
+      draft.backgroundColor !== rgbToHex(initial.computed.backgroundColor)
+    ) {
+      style.backgroundColor = draft.backgroundColor
+    }
+    if (commitFields.has('objectFit') && draft.objectFit !== (initial.computed.objectFit || 'contain')) {
+      style.objectFit = draft.objectFit
+    }
+    if (commitFields.has('text') && draft.text.trim() && draft.text.trim() !== (initial.text?.value || '')) {
+      text = draft.text.trim()
+    }
+    if (commitFields.has('color') && draft.color !== rgbToHex(initial.computed.color)) {
+      style.color = draft.color
+    }
+    if (commitFields.has('fontSize') && draft.fontSize !== fontSizeToNumber(initial.computed.fontSize)) {
+      style.fontSize = draft.fontSize ? `${draft.fontSize}px` : undefined
+    }
+    if (
+      commitFields.has('fontWeight') &&
+      draft.fontWeight !== normalizeFontWeight(initial.computed.fontWeight)
+    ) {
+      style.fontWeight = draft.fontWeight
+    }
+    if (commitFields.has('alt') && draft.alt !== (initial.attrs.alt || '')) attrs.alt = draft.alt
+    if (commitFields.has('poster') && draft.poster !== (initial.attrs.poster || '')) {
+      attrs.poster = draft.poster
+    }
+    if (commitFields.has('controls') && draft.controls !== Boolean(initial.attrs.controls)) {
+      attrs.controls = draft.controls
+    }
+    if (commitFields.has('muted') && draft.muted !== Boolean(initial.attrs.muted)) {
+      attrs.muted = draft.muted
+    }
+    if (commitFields.has('loop') && draft.loop !== Boolean(initial.attrs.loop)) {
+      attrs.loop = draft.loop
+    }
+    if (commitFields.has('autoplay') && draft.autoplay !== Boolean(initial.attrs.autoplay)) {
+      attrs.autoplay = draft.autoplay
+    }
+
+    if (text === undefined && Object.keys(style).length === 0 && Object.keys(attrs).length === 0) {
+      return null
+    }
+    return {
+      text,
+      style: Object.keys(style).length > 0 ? style : undefined,
+      attrs: Object.keys(attrs).length > 0 ? attrs : undefined
+    }
+  }
+
+  const commitElementDraft = (
+    draft: ElementEditDraft,
+    fields?: Array<keyof ElementEditDraft>
+  ): boolean => {
+    if (!textSelection || !selectedPage?.pageId || !selectedPage.htmlPath) return false
+    const patch = buildElementPropertyPatch(draft, fields)
+    if (!patch) return false
+    editHistory.upsertPropertyEdit({
+      pageId: selectedPage.pageId,
+      htmlPath: selectedPage.htmlPath,
+      selector: textSelection.selector,
+      blockId: textSelection.blockId,
+      patch
+    })
+    return true
+  }
+
+  const commitCurrentElementEdit = (): boolean => commitElementDraft(textDraft)
+
+  const handleTextDraftChange = (
+    draft: ElementEditDraft,
+    options?: { commit?: boolean; fields?: Array<keyof ElementEditDraft> }
+  ): void => {
+    const liveStyle: {
+      zIndex?: number
+      opacity?: number
+      backgroundColor?: string
+      objectFit?: string
+    } = {}
+    const liveAttrs: {
+      alt?: string
+      poster?: string
+      controls?: boolean
+      muted?: boolean
+      loop?: boolean
+      autoplay?: boolean
+    } = {}
+
+    if (textSelection && selectedPage?.htmlPath && selectedPage?.pageId && draft.layoutZIndex !== textDraft.layoutZIndex) {
+      const zNum = parseInt(draft.layoutZIndex, 10)
+      if (Number.isFinite(zNum)) liveStyle.zIndex = zNum
+    }
+    if (draft.opacity !== textDraft.opacity) {
+      const opacity = Number(draft.opacity)
+      if (Number.isFinite(opacity)) liveStyle.opacity = opacity
+    }
+    if (draft.backgroundColor !== textDraft.backgroundColor) {
+      liveStyle.backgroundColor = draft.backgroundColor
+    }
+    if (draft.objectFit !== textDraft.objectFit) {
+      liveStyle.objectFit = draft.objectFit
+    }
+    if (draft.alt !== textDraft.alt) liveAttrs.alt = draft.alt
+    if (draft.poster !== textDraft.poster) liveAttrs.poster = draft.poster
+    if (draft.controls !== textDraft.controls) liveAttrs.controls = draft.controls
+    if (draft.muted !== textDraft.muted) liveAttrs.muted = draft.muted
+    if (draft.loop !== textDraft.loop) liveAttrs.loop = draft.loop
+    if (draft.autoplay !== textDraft.autoplay) liveAttrs.autoplay = draft.autoplay
+
     setTextDraft(draft)
     // Live preview in iframe
     if (textSelection && selectedPage?.pageId) {
@@ -1157,6 +1403,12 @@ export function SessionDetailPage(): React.JSX.Element {
       const zNum = parseInt(draft.layoutZIndex, 10)
       if (Number.isFinite(zNum) && draft.layoutZIndex !== textDraft.layoutZIndex) {
         previewIframeRef.current?.applyZIndex(textSelection.selector, zNum)
+      }
+      if (Object.keys(liveStyle).length > 0 || Object.keys(liveAttrs).length > 0) {
+        previewIframeRef.current?.applyElementProperties(textSelection.selector, {
+          style: liveStyle,
+          attrs: liveAttrs
+        })
       }
       // Text & style: only for text elements
       if (textSelection.isText) {
@@ -1169,37 +1421,11 @@ export function SessionDetailPage(): React.JSX.Element {
           }
         })
       }
-    }
-  }
 
-  // When user starts editing a new element, save the previous text edit as pending
-  const commitCurrentTextEdit = (): void => {
-    if (!textSelection || !selectedPage?.pageId || !selectedPage.htmlPath) return
-    const nextText = textDraft.text.trim()
-    if (!nextText) return
-    // Skip if nothing actually changed
-    if (
-      nextText === textSelection.text &&
-      textDraft.color === rgbToHex(textSelection.style.color) &&
-      textDraft.fontSize === fontSizeToNumber(textSelection.style.fontSize) &&
-      textDraft.fontWeight === normalizeFontWeight(textSelection.style.fontWeight)
-    )
-      return
-    const patch = {
-      text: nextText,
-      style: {
-        color: textDraft.color,
-        fontSize: textDraft.fontSize,
-        fontWeight: textDraft.fontWeight
+      if (options?.commit) {
+        commitElementDraft(draft, options.fields)
       }
     }
-    const entry = {
-      pageId: selectedPage.pageId,
-      htmlPath: selectedPage.htmlPath,
-      selector: textSelection.selector,
-      patch
-    }
-    editHistory.upsertTextEdit(entry)
   }
 
   const replayPendingEdits = (): void => {
@@ -1218,7 +1444,8 @@ export function SessionDetailPage(): React.JSX.Element {
         x: d.x,
         y: d.y,
         width: d.width ?? undefined,
-        height: d.height ?? undefined
+        height: d.height ?? undefined,
+        isAbsoluteMode: d.isAbsoluteMode
       })
       if (d.zIndex !== undefined) {
         iframe.applyZIndex(d.selector, d.zIndex)
@@ -1232,6 +1459,22 @@ export function SessionDetailPage(): React.JSX.Element {
         text: t.patch.text,
         style: t.patch.style
       })
+    }
+    for (const p of snapshot.propertyEdits) {
+      iframe.applyElementProperties(p.selector, {
+        style: p.patch.style,
+        attrs: p.patch.attrs
+      })
+      if (p.patch.text || p.patch.style?.color || p.patch.style?.fontSize || p.patch.style?.fontWeight) {
+        iframe.liveUpdateElement(p.selector, {
+          text: p.patch.text,
+          style: {
+            color: p.patch.style?.color,
+            fontSize: p.patch.style?.fontSize,
+            fontWeight: p.patch.style?.fontWeight
+          }
+        })
+      }
     }
   }
 
@@ -1252,8 +1495,8 @@ export function SessionDetailPage(): React.JSX.Element {
   }
 
   const handleCancelTextEdit = (): void => {
-    // Commit current text edit before closing panel
-    commitCurrentTextEdit()
+    // Commit current inspector edit before closing panel.
+    commitCurrentElementEdit()
     previewIframeRef.current?.clearEditModeSelection()
     setTextSelection(null)
     setTextDraft(EMPTY_ELEMENT_DRAFT)
@@ -1264,8 +1507,27 @@ export function SessionDetailPage(): React.JSX.Element {
     const blockId = 'select-arcsin1-' + nanoid(8)
     const newSelector = previewIframeRef.current?.copyElement(textSelection.selector, blockId)
     if (!newSelector) return
-    const bounds = textSelection.bounds
+    const bounds = textSelection.pageBounds || textSelection.bounds
     const zValue = textSelection.zIndex !== undefined ? String(textSelection.zIndex + 1) : '10'
+    const nextSnapshot = textSelection.snapshot
+      ? {
+          ...textSelection.snapshot,
+          selector: newSelector,
+          blockId,
+          label: newSelector,
+          metrics: {
+            ...textSelection.snapshot.metrics,
+            page: bounds
+              ? { x: bounds.x + 20, y: bounds.y + 20, width: bounds.width, height: bounds.height }
+              : textSelection.snapshot.metrics.page,
+            viewport: bounds
+              ? { x: bounds.x + 20, y: bounds.y + 20, width: bounds.width, height: bounds.height }
+              : textSelection.snapshot.metrics.viewport,
+            translateX: 0,
+            translateY: 0
+          }
+        }
+      : null
     editHistory.addElement({
       pageId: selectedPage.pageId,
       htmlPath: selectedPage.htmlPath,
@@ -1276,13 +1538,18 @@ export function SessionDetailPage(): React.JSX.Element {
     })
     handleElementSelected({
       selector: newSelector,
+      blockId,
       label: newSelector,
       elementTag: textSelection.elementTag,
       elementText: '',
+      kind: textSelection.kind,
+      capabilities: textSelection.capabilities,
+      snapshot: nextSnapshot,
       isText: false,
       text: '',
       style: {},
       bounds: bounds ? { x: bounds.x + 20, y: bounds.y + 20, width: bounds.width, height: bounds.height } : undefined,
+      pageBounds: bounds ? { x: bounds.x + 20, y: bounds.y + 20, width: bounds.width, height: bounds.height } : undefined,
       translateX: 0,
       translateY: 0,
       zIndex: parseInt(zValue, 10),
@@ -1364,6 +1631,7 @@ export function SessionDetailPage(): React.JSX.Element {
                 onExportPdf={() => void handleExportPdf()}
                 onExportPng={() => void handleExportPng()}
                 onExportPptx={(options) => void handleExportPptx(options)}
+                onExportSessionZip={() => void handleExportSessionZip()}
                 onExportSlidePack={() => void handleExportSlidePack()}
                 onOpenHistory={() => void handleOpenHistory()}
                 onOpenPreview={() => void openProjectPreview()}
@@ -1412,7 +1680,13 @@ export function SessionDetailPage(): React.JSX.Element {
               selectedPage
                 ? (() => {
                     const s = editHistory.getSnapshotForPage(selectedPage.pageId)
-                    return s.dragEdits.length > 0 || s.textEdits.length > 0 || s.deletes.length > 0 || s.addElements.length > 0
+                    return (
+                      s.dragEdits.length > 0 ||
+                      s.textEdits.length > 0 ||
+                      s.propertyEdits.length > 0 ||
+                      s.deletes.length > 0 ||
+                      s.addElements.length > 0
+                    )
                   })()
                 : false
             }
