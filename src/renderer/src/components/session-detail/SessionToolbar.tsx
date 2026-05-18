@@ -151,21 +151,21 @@ export function SessionToolbar({
             </TooltipTrigger>
             <TooltipContent>{t('sessionDetail.exportPackageTooltip')}</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="start" className="min-w-[17rem]">
+          <DropdownMenuContent align="start" className="w-72">
             <DropdownMenuItem className="items-start" onClick={onExportSlidePack}>
               <Package className={cn(dropdownItemIconClass, 'mt-0.5')} />
-              <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 whitespace-normal">
                 <span>{t('sessionDetail.exportSlidePack')}</span>
-                <span className="text-xs leading-snug text-[#7c6f5f]">
+                <span className="text-[11px] leading-snug text-[#9a8f80]">
                   {t('sessionDetail.exportSlidePackDescription')}
                 </span>
               </span>
             </DropdownMenuItem>
             <DropdownMenuItem className="items-start" onClick={onExportSessionZip}>
               <Archive className={cn(dropdownItemIconClass, 'mt-0.5')} />
-              <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 whitespace-normal">
                 <span>{t('sessionDetail.exportSessionZip')}</span>
-                <span className="text-xs leading-snug text-[#7c6f5f]">
+                <span className="text-[11px] leading-snug text-[#9a8f80]">
                   {t('sessionDetail.exportSessionZipDescription')}
                 </span>
               </span>
