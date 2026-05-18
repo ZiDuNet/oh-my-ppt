@@ -31,10 +31,30 @@ jobs:
             VERSION=$(node -p "require('./package.json').version")
             BRANCH="${GITHUB_REF#refs/heads/}"
             TAG="v${VERSION}-${BRANCH}"
-            git tag "$TAG" || true
-            git push origin "$TAG" || true
+            git tag -f "$TAG" || true
+            git push origin "$TAG" -f || true
           fi
           echo "value=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete old releases and tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.tag.outputs.value }}';
+            const { owner, repo } = context.repo;
+            // 删除该 tag 下的所有 release（包括 draft）
+            const releases = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
+            for (const r of releases.data) {
+              if (r.tag_name === tag) {
+                console.log(`Deleting release ${r.id} (${r.tag_name})`);
+                await github.rest.repos.deleteRelease({ owner, repo, release_id: r.id });
+              }
+            }
+            // 删除远端 tag
+            try { await github.rest.git.deleteRef({ owner, repo, ref: `tags/${tag}` }); } catch(e) {}
+            // 重新推送 tag
+            const { execSync } = require('child_process');
+            execSync(`git tag -f ${tag} && git push origin ${tag} -f`);
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -42,7 +62,15 @@ jobs:
           tag_name: ${{ steps.tag.outputs.value }}
           name: ${{ steps.tag.outputs.value }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          body: Build from ${{ github.ref_name }}
+          body: |
+            Build from ${{ github.ref_name }}
+
+            ---
+
+            **macOS 用户注意**：下载后若提示"已损坏，无法打开"，请在终端执行：
+            ```
+            sudo xattr -rd com.apple.quarantine /Applications/OhMyPPT.app
+            ```
 
   build-windows:
     needs: release
@@ -52,12 +80,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: pnpm
 
-      - run: npm install
-      - run: npm run build
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run build
       - run: npx electron-builder --win --publish never
 
       - name: Upload Windows installer
@@ -74,12 +107,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: pnpm
 
-      - run: npm install
-      - run: npm run build
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run build
       - run: npx electron-builder --mac --publish never
 
       - name: Upload Mac installer

@@ -33,7 +33,6 @@ files:
   - '!thumb.png'
   - '!node_modules/tiktoken'
   - '!node_modules/web-streams-polyfill'
-asar: false
 asarUnpack:
   - resources/**
   - node_modules/@node-rs/**/*.node
@@ -68,7 +67,6 @@ nsis:
   allowToChangeInstallationDirectory: true
   allowElevation: true
   createStartMenuShortcut: true
-  include: installer.nsh
 mac:
   icon: build/icons/icon.icns
   identity: null
@@ -94,5 +92,3 @@ publish:
   provider: github
   owner: ZiDuNet
   repo: oh-my-ppt
-electronDownload:
-  mirror: https://npmmirror.com/mirrors/electron/

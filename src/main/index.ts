@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, screen, type Size } from 'electron'
+import { app, shell, BrowserWindow, screen, protocol, type Size } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -268,6 +268,10 @@ function showMainWindow(): void {
   mainWindow.show()
   mainWindow.focus()
 }
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'local-asset', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+])
 
 if (gotSingleInstanceLock) {
   app.on('second-instance', () => {
