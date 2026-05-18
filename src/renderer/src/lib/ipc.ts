@@ -688,6 +688,11 @@ const QUOTA_UNITS = [
   { divisor: 10000, label: '万' }
 ] as const
 
+export function localAssetUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  return `local-asset://f/${encodeURIComponent(normalized)}`
+}
+
 export function formatQuota(value: number | undefined | null): string {
   if (value == null) return '-'
   if (value === 0) return '0'

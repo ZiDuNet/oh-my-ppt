@@ -7,7 +7,7 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '../components/ui/Popover'
-import { ipc } from '@renderer/lib/ipc'
+import { ipc, localAssetUrl } from '@renderer/lib/ipc'
 import { useToastStore } from '../store'
 import { Plus, PencilLine, Eye, RefreshCw } from 'lucide-react'
 import { useT } from '../i18n'
@@ -31,8 +31,6 @@ type StyleSummary = {
 function isBuiltinSource(source?: StyleSource): boolean {
   return source === 'builtin' || source === 'override'
 }
-
-const localAssetUrl = (filePath: string): string => `local-asset://${encodeURIComponent(filePath)}`
 
 export function StylesPage(): React.JSX.Element {
   const navigate = useNavigate()

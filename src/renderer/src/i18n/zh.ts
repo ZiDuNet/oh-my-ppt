@@ -223,9 +223,9 @@ export const zh = {
     stylesCloudUrlHint: '风格管理页点击「从云端同步」时拉取此地址的 JSON 文件。',
     visionModelFollowDefault: '跟随默认模型',
     // ---------- NewAPI ----------
-    newapiTab: '云服务',
-    newapiTitle: 'NewAPI 云服务',
-    newapiDescription: '登录 NewAPI 云平台，使用云端模型生成 PPT。',
+    newapiTab: '账户信息',
+    newapiTitle: '潮汐平台账户',
+    newapiDescription: '登录平台账户，选择可用模型。',
     newapiUsername: '用户名',
     newapiPassword: '密码',
     newapiEmail: '邮箱（选填）',

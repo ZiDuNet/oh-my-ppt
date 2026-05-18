@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Play } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
-import { ipc } from '@renderer/lib/ipc'
+import { ipc, localAssetUrl } from '@renderer/lib/ipc'
 import {
   Dialog,
   DialogContent,
@@ -119,7 +119,7 @@ export function AssetPickerDialog({
                           ref={(el) => {
                             if (el) videoRefs.current.set(asset.relativePath, el)
                           }}
-                          src={`local-asset://${encodeURIComponent(asset.absolutePath)}`}
+                          src={localAssetUrl(asset.absolutePath)}
                           controls
                           autoPlay
                           playsInline
@@ -128,7 +128,7 @@ export function AssetPickerDialog({
                       ) : (
                         <>
                           <video
-                            src={`local-asset://${encodeURIComponent(asset.absolutePath)}`}
+                            src={localAssetUrl(asset.absolutePath)}
                             preload="metadata"
                             muted
                             playsInline
@@ -147,7 +147,7 @@ export function AssetPickerDialog({
                       )
                     ) : (
                       <img
-                        src={`local-asset://${encodeURIComponent(asset.absolutePath)}`}
+                        src={localAssetUrl(asset.absolutePath)}
                         alt={asset.fileName}
                         className={cn(
                           'h-full w-full object-cover transition-transform duration-200',

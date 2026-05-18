@@ -56,8 +56,24 @@ export function allowLocalAssetRoot(rootPath: string): void {
 
 export function registerLocalAssetProtocol(): void {
   protocol.handle('local-asset', (request) => {
-    const requestedPath = decodeURIComponent(request.url.replace('local-asset://', ''))
+    let requestedPath: string
+    try {
+      const url = new URL(request.url)
+      // 三斜杠格式 local-asset:///encodedPath → pathname = /encodedPath
+      if (url.pathname.length > 1) {
+        requestedPath = decodeURIComponent(url.pathname.slice(1))
+      } else {
+        // 旧双斜杠格式（macOS/Linux 兼容）
+        const host = url.hostname
+        const rest = url.pathname
+        requestedPath = decodeURIComponent(`${host}${rest}`)
+      }
+    } catch {
+      requestedPath = decodeURIComponent(request.url.replace(/^local-asset:\/\//, ''))
+    }
+    console.log('[local-asset] raw url:', request.url, '→ path:', requestedPath)
     const filePath = assertLocalAssetAllowed(requestedPath)
+    console.log('[local-asset] resolved:', filePath)
     if (!filePath) return new Response('Forbidden', { status: 403 })
     try {
       const stat = fs.statSync(filePath)

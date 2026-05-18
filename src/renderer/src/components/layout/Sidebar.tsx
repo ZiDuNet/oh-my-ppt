@@ -171,7 +171,7 @@ export function Sidebar(): React.JSX.Element {
                     {newapiUser.displayName || newapiUser.username}
                   </span>
                   {(() => {
-                    const sub = newapiSubscription?.[0]
+                    const sub = newapiSubscription?.subscriptions?.[0]
                     if (sub?.status === 'active') {
                       return (
                         <span className="ml-auto shrink-0 rounded-full bg-[#a8d98a]/30 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-[#d4f5b8]">
@@ -188,7 +188,7 @@ export function Sidebar(): React.JSX.Element {
                 </div>
                 {/* 套餐/余额信息 */}
                 {(() => {
-                  const sub = newapiSubscription?.[0]
+                  const sub = newapiSubscription?.subscriptions?.[0]
                   const plan = sub ? newapiPlans?.find((p) => p.id === sub.planId) : null
                   if (sub) {
                     return (

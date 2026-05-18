@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
+import { LoginDialog } from '../components/LoginDialog'
 import {
   Select,
   SelectContent,
@@ -11,30 +12,27 @@ import {
 } from '../components/ui/Select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs'
 import { useSettingsStore } from '../store'
+import { useSearchParams } from 'react-router-dom'
 import { useToastStore } from '../store'
-import { CheckCircle2, FolderSearch, Pencil, Plus, ShieldCheck, Trash2, X, RefreshCw, LogOut, Cloud, User, BarChart3, FileText, CreditCard } from 'lucide-react'
-import { useLang } from '../i18n'
-import type { ModelConfig } from '../lib/ipc'
-import { formatQuota } from '../lib/ipc'
+import {
+  CheckCircle2,
+  FolderSearch,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  ShieldCheck,
+  Save
+} from 'lucide-react'
+import { useLang, type I18nKey } from '../i18n'
 import {
   CONFIGURABLE_MODEL_TIMEOUT_PROFILES,
   type ConfigurableModelTimeoutProfile,
-  modelTimeoutMsToSeconds,
-  resolveModelTimeoutMs
+  modelTimeoutMsToSeconds
 } from '@shared/model-timeout.js'
+import type { ModelInfo } from '@renderer/lib/ipc'
+import { formatQuota } from '@renderer/lib/ipc'
 
-type ProviderId = 'anthropic' | 'openai'
-
-interface ModelForm {
-  id?: string
-  name: string
-  provider: ProviderId
-  model: string
-  apiKey: string
-  baseUrl: string
-  maxTokens: number
-  active: boolean
-}
+// ── helpers ──
 
 const createTimeoutSeconds = (
   timeouts?: Partial<Record<ConfigurableModelTimeoutProfile, number>>
@@ -46,231 +44,600 @@ const createTimeoutSeconds = (
     ])
   ) as Record<ConfigurableModelTimeoutProfile, number>
 
-const createEmptyModelForm = (active = false): ModelForm => ({
-  name: '',
-  provider: 'openai',
-  model: '',
-  apiKey: '',
-  baseUrl: '',
-  maxTokens: 4096,
-  active
-})
+// ── memoized model option lists ──
 
-const createModelForm = (config: ModelConfig): ModelForm => ({
-  id: config.id,
-  name: config.name,
-  provider: config.provider,
-  model: config.model,
-  apiKey: config.apiKey,
-  baseUrl: config.baseUrl,
-  maxTokens: config.maxTokens || 4096,
-  active: config.active
-})
-
-export function SettingsPage(): React.JSX.Element {
-  const {
-    modelConfigs,
-    fetchSettings,
-    saveSettings,
-    upsertModelConfig,
-    setActiveModelConfig,
-    deleteModelConfig,
-    setVerificationMessage,
-    verifyApiKey,
-    chooseStoragePath,
-    // NewAPI
-    newapiUser,
-    newapiLoggedIn,
-    newapiModels,
-    newapiLoading,
-    newapiVerificationMessage,
-    newapiLogs,
-    newapiTokenUsage,
-    newapiSubscription,
-    newapiPlans,
-    newapiLogin,
-    newapiLogout,
-    newapiFetchStatus,
-    newapiFetchModels,
-    newapiSetModel,
-    newapiRefreshUser,
-    newapiFetchLogs,
-    newapiFetchTokenUsage,
-    newapiFetchSubscription
-  } = useSettingsStore()
-  const { success, error, warning, info } = useToastStore()
-  const { lang, setLang, t } = useLang()
-  const [storagePath, setStoragePath] = useState(
-    () => useSettingsStore.getState().settings?.storagePath || ''
+const ModelSelectItems = memo(function ModelSelectItems({
+  models
+}: {
+  models: ModelInfo[]
+}) {
+  return (
+    <>
+      {models.map((model) => (
+        <SelectItem key={model.id} value={model.id}>
+          {model.id}
+        </SelectItem>
+      ))}
+    </>
   )
-  const [modelDialogOpen, setModelDialogOpen] = useState(false)
-  const [modelForm, setModelForm] = useState<ModelForm>(() => createEmptyModelForm())
-  const [timeoutSeconds, setTimeoutSeconds] = useState<
-    Record<ConfigurableModelTimeoutProfile, number>
-  >(() => createTimeoutSeconds(useSettingsStore.getState().settings?.timeouts))
-  const [savingModel, setSavingModel] = useState(false)
-  const [savingTimeouts, setSavingTimeouts] = useState(false)
+})
+
+// ── Logged-in panel ──
+
+const LoggedInPanel = memo(function LoggedInPanel({
+  models,
+  activeModel,
+  visionModelId,
+  t
+}: {
+  models: ModelInfo[]
+  activeModel: string
+  visionModelId: string
+  t: (key: I18nKey) => string
+}) {
+  const newapiSetModel = useSettingsStore((s) => s.newapiSetModel)
+  const setVerificationMessage = useSettingsStore((s) => s.setVerificationMessage)
+  const verifyApiKey = useSettingsStore((s) => s.verifyApiKey)
+  const modelConfigs = useSettingsStore((s) => s.modelConfigs)
+  const newapiFetchModels = useSettingsStore((s) => s.newapiFetchModels)
+  const { success, error, warning } = useToastStore()
+
+  const [fetchingModels, setFetchingModels] = useState(false)
+
+  const [pendingModel, setPendingModel] = useState(activeModel)
   const [verifying, setVerifying] = useState(false)
-  const [activatingId, setActivatingId] = useState<string | null>(null)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [visionModelId, setVisionModelId] = useState(
-    () => useSettingsStore.getState().settings?.visionModelId || ''
-  )
-  const [stylesCloudUrl, setStylesCloudUrl] = useState(
-    () => useSettingsStore.getState().settings?.stylesCloudUrl || ''
-  )
+  const [savingModel, setSavingModel] = useState(false)
+  const [localVisionId, setLocalVisionId] = useState(visionModelId)
 
-  // NewAPI 本地表单状态
-  const [newapiUsernameInput, setNewapiUsernameInput] = useState('')
-  const [newapiPasswordInput, setNewapiPasswordInput] = useState('')
-  const [newapiEmailInput, setNewapiEmailInput] = useState('')
-  const [newapiSelectedModel, setNewapiSelectedModel] = useState('')
+  // sync from parent
+  useEffect(() => {
+    setPendingModel(activeModel)
+  }, [activeModel])
 
   useEffect(() => {
-    let active = true
-    const loadSettings = async (): Promise<void> => {
-      await fetchSettings()
-      if (!active) return
-      const nextSettings = useSettingsStore.getState().settings
-      setStoragePath(nextSettings?.storagePath || '')
-      setTimeoutSeconds(createTimeoutSeconds(nextSettings?.timeouts))
-      setVisionModelId(nextSettings?.visionModelId || '')
-      setStylesCloudUrl(nextSettings?.stylesCloudUrl || '')
-    }
-    void loadSettings()
-    return () => {
-      active = false
-    }
-  }, [fetchSettings])
+    setLocalVisionId(visionModelId)
+  }, [visionModelId])
 
-  useEffect(() => {
-    if (!modelDialogOpen) return
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !savingModel) {
-        setModelDialogOpen(false)
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [modelDialogOpen, savingModel])
-
-  // NewAPI 初始化：进入设置页时检查登录状态
-  useEffect(() => {
-    void newapiFetchStatus()
-  }, [newapiFetchStatus])
-
-  const activeModelConfig = modelConfigs.find((config) => config.active)
-  const timeoutFields: Array<{
-    profile: ConfigurableModelTimeoutProfile
-    label: string
-    hint: string
-    min: number
-  }> = useMemo(
-    () => [
-      {
-        profile: 'planning',
-        label: t('settings.timeoutPlanning'),
-        hint: t('settings.timeoutPlanningHint'),
-        min: 120
-      },
-      {
-        profile: 'design',
-        label: t('settings.timeoutDesign'),
-        hint: t('settings.timeoutDesignHint'),
-        min: 120
-      },
-      {
-        profile: 'agent',
-        label: t('settings.timeoutAgent'),
-        hint: t('settings.timeoutAgentHint'),
-        min: 300
-      },
-      {
-        profile: 'document',
-        label: t('settings.timeoutDocument'),
-        hint: t('settings.timeoutDocumentHint'),
-        min: 300
-      }
-    ],
-    [t]
-  )
-
-  const openCreateModelDialog = (): void => {
-    setModelForm(createEmptyModelForm(modelConfigs.length === 0))
-    setVerificationMessage(null)
-    setModelDialogOpen(true)
-  }
-
-  const openEditModelDialog = (config: ModelConfig): void => {
-    setModelForm(createModelForm(config))
-    setVerificationMessage(null)
-    setModelDialogOpen(true)
-  }
-
-  const updateModelForm = (patch: Partial<ModelForm>): void => {
-    setModelForm((form) => ({ ...form, ...patch }))
-    setVerificationMessage(null)
-  }
-
-  const handleSaveModel = async (): Promise<void> => {
-    if (!modelForm.name.trim()) {
-      warning(t('settings.fillModelName'))
+  const handleVerify = useCallback(async () => {
+    if (!pendingModel) {
+      warning('请先选择模型。')
       return
     }
-    if (!modelForm.model.trim()) {
-      warning(t('settings.fillModel'))
-      return
-    }
-    if (!modelForm.apiKey.trim()) {
-      warning(t('settings.fillApiKey'))
-      return
-    }
-
-    setSavingModel(true)
+    setVerifying(true)
     setVerificationMessage(null)
     try {
-      const id = await upsertModelConfig({
-        id: modelForm.id,
-        name: modelForm.name.trim(),
-        provider: modelForm.provider,
-        model: modelForm.model.trim(),
-        apiKey: modelForm.apiKey.trim(),
-        baseUrl: modelForm.baseUrl.trim(),
-        maxTokens: modelForm.maxTokens,
-        active: modelForm.active
-      })
+      const config = modelConfigs.find((c) => c.active)
+      if (!config) return
+      const valid = await verifyApiKey(
+        config.provider,
+        config.apiKey,
+        pendingModel,
+        config.baseUrl,
+        config.maxTokens || 4096,
+        30000
+      )
+      const msg = useSettingsStore.getState().verificationMessage
+      if (valid) {
+        success('连接验证成功', { description: msg || '模型连接正常。' })
+      } else {
+        error('连接验证失败', { description: msg || '请检查模型配置。' })
+      }
+    } finally {
+      setVerifying(false)
+    }
+  }, [pendingModel, modelConfigs, verifyApiKey, setVerificationMessage, success, error, warning])
+
+  const handleSave = useCallback(async () => {
+    if (!pendingModel) {
+      warning('请先选择模型。')
+      return
+    }
+    setSavingModel(true)
+    try {
+      await newapiSetModel(pendingModel)
       const saveError = useSettingsStore.getState().verificationMessage
-      if (!id || saveError) {
-        error(t('settings.saveFailed'), { description: saveError || t('common.retryLater') })
+      if (saveError) {
+        error('保存失败', { description: saveError })
         return
       }
-      setModelDialogOpen(false)
-      success(t('settings.modelSaved'), { description: t('settings.modelSavedDescription') })
+      success('模型已保存')
     } finally {
       setSavingModel(false)
     }
+  }, [pendingModel, newapiSetModel, success, error, warning])
+
+  const handleVisionChange = useCallback(
+    async (id: string) => {
+      const value = id === '__default__' ? '' : id
+      setLocalVisionId(value)
+      setVerificationMessage(null)
+      try {
+        const { saveSettings } = useSettingsStore.getState()
+        await saveSettings({ visionModelId: value })
+        const saveError = useSettingsStore.getState().verificationMessage
+        if (saveError) {
+          error(t('settings.saveFailed'), { description: saveError })
+          return
+        }
+        success(t('settings.saved'))
+      } catch {
+        error(t('settings.saveFailed'))
+      }
+    },
+    [setVerificationMessage, success, error, t]
+  )
+
+  const modelChanged = pendingModel !== activeModel
+
+  const modelOptions = useMemo(() => models, [models])
+
+  const handleFetchModels = useCallback(async () => {
+    setFetchingModels(true)
+    await newapiFetchModels()
+    setFetchingModels(false)
+  }, [newapiFetchModels])
+
+  return (
+    <>
+      <Card className="mb-4">
+        <CardHeader className="p-5 pb-3">
+          <CardTitle className="text-base">模型选择</CardTitle>
+          {activeModel && (
+            <p className="mt-1 text-xs text-muted-foreground">当前模型：{activeModel}</p>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3 p-5 pt-0">
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="text-sm font-medium">选择模型</label>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+                disabled={fetchingModels}
+                onClick={() => void handleFetchModels()}
+              >
+                <RefreshCw className={`h-3 w-3 ${fetchingModels ? 'animate-spin' : ''}`} />
+                {fetchingModels ? '获取中...' : '获取模型'}
+              </Button>
+            </div>
+            <Select value={pendingModel} onValueChange={setPendingModel}>
+              <SelectTrigger className="h-10">
+                <SelectValue placeholder="选择可用模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <ModelSelectItems models={modelOptions} />
+              </SelectContent>
+            </Select>
+            <p className="mt-2 text-xs text-muted-foreground">
+              模型列表来自平台，不同账号可用的模型可能不同。
+            </p>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">{t('settings.visionModel')}</label>
+            <Select
+              value={localVisionId || '__default__'}
+              onValueChange={(v) => void handleVisionChange(v)}
+            >
+              <SelectTrigger className="h-10">
+                <SelectValue placeholder={t('settings.visionModelFollowDefault')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">
+                  {t('settings.visionModelFollowDefault')}
+                </SelectItem>
+                <ModelSelectItems models={modelOptions} />
+              </SelectContent>
+            </Select>
+            <p className="mt-2 text-xs text-muted-foreground">{t('settings.visionModelHint')}</p>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button
+              variant="secondary"
+              disabled={verifying || !pendingModel}
+              onClick={() => void handleVerify()}
+              className="rounded-lg border border-[#7ea06f]/45"
+            >
+              <ShieldCheck className="mr-1.5 h-4 w-4" />
+              {verifying ? '验证中...' : '验证连接'}
+            </Button>
+            <Button disabled={savingModel || !modelChanged} onClick={() => void handleSave()}>
+              <Save className="mr-1.5 h-4 w-4" />
+              {savingModel ? '保存中...' : '保存'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </>
+  )
+})
+
+// ── Usage panel ──
+
+function UsagePanel(): React.JSX.Element {
+  const newapiUser = useSettingsStore((s) => s.newapiUser)
+  const newapiLoading = useSettingsStore((s) => s.newapiLoading)
+  const newapiLogout = useSettingsStore((s) => s.newapiLogout)
+  const newapiLogs = useSettingsStore((s) => s.newapiLogs)
+  const newapiLogsTotal = useSettingsStore((s) => s.newapiLogsTotal)
+  const newapiLogsPage = useSettingsStore((s) => s.newapiLogsPage)
+  const newapiTokenUsage = useSettingsStore((s) => s.newapiTokenUsage)
+  const newapiSubscription = useSettingsStore((s) => s.newapiSubscription)
+  const newapiPlans = useSettingsStore((s) => s.newapiPlans)
+  const newapiFetchLogs = useSettingsStore((s) => s.newapiFetchLogs)
+  const newapiFetchTokenUsage = useSettingsStore((s) => s.newapiFetchTokenUsage)
+  const newapiRefreshUser = useSettingsStore((s) => s.newapiRefreshUser)
+  const newapiFetchSubscription = useSettingsStore((s) => s.newapiFetchSubscription)
+  const { success } = useToastStore()
+
+  useEffect(() => {
+    void Promise.all([newapiFetchLogs(0, 20), newapiFetchTokenUsage(), newapiFetchSubscription()])
+  }, [newapiFetchLogs, newapiFetchTokenUsage, newapiFetchSubscription])
+
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      newapiRefreshUser(),
+      newapiFetchLogs(newapiLogsPage, 20),
+      newapiFetchTokenUsage(),
+      newapiFetchSubscription()
+    ])
+  }, [newapiRefreshUser, newapiFetchLogs, newapiFetchTokenUsage, newapiFetchSubscription, newapiLogsPage])
+
+  const handleLogout = useCallback(async () => {
+    if (!window.confirm('确定退出登录？')) return
+    await newapiLogout()
+    success('已退出登录')
+  }, [newapiLogout, success])
+
+  const totalPages = Math.ceil(newapiLogsTotal / 20)
+
+  const formatTime = (ts: number) => {
+    if (!ts) return '-'
+    const d = new Date(ts * 1000)
+    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   }
 
-  const handleTimeoutChange = (profile: ConfigurableModelTimeoutProfile, value: string): void => {
-    setTimeoutSeconds((current) => ({
-      ...current,
-      [profile]: modelTimeoutMsToSeconds(Number(value) * 1000, profile)
-    }))
-    setVerificationMessage(null)
+  const activeSub = newapiSubscription?.subscriptions?.[0]
+  const activePlan = activeSub ? newapiPlans.find((p) => p.id === activeSub.planId) : null
+
+  const billingLabel = (val: string) => {
+    if (val === 'subscription_first' || val === '优先订阅') return '优先订阅'
+    if (val === 'wallet_first' || val === '优先钱包') return '优先钱包'
+    if (val === 'subscription_only' || val === '仅用订阅') return '仅用订阅'
+    if (val === 'wallet_only' || val === '仅用钱包') return '仅用钱包'
+    return val
   }
 
-  const handleSaveTimeouts = async (): Promise<void> => {
+  const durationLabel = (unit: string, value: number) => {
+    const u = unit === 'month' ? '个月' : unit === 'year' ? '年' : unit === 'day' ? '天' : unit
+    return `${value} ${u}`
+  }
+
+  return (
+    <>
+      {/* 账号信息 + 额度 合并 */}
+      {newapiUser && (
+        <Card className="mb-3">
+          <CardHeader className="flex-row items-center justify-between p-3 pb-2">
+            <CardTitle className="text-sm">账号信息</CardTitle>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => void handleRefresh()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 px-2 text-xs"
+                disabled={newapiLoading}
+                onClick={() => void handleLogout()}
+              >
+                <LogOut className="h-3 w-3" />
+                退出
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2 p-3 pt-0 text-xs">
+            {/* 用户行 */}
+            <div className="flex items-center gap-2 rounded-md border border-[#96b77f]/60 bg-[#eef6e8]/70 px-2.5 py-2">
+              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#4a5a3d] text-[11px] font-bold text-white">
+                {(newapiUser.displayName || newapiUser.username).charAt(0).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#5d7b4d]" />
+                  <span className="truncate font-medium text-[#33402a]">
+                    {newapiUser.displayName || newapiUser.username}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">@{newapiUser.username}</span>
+                  <span className={`ml-auto shrink-0 text-[10px] font-medium ${newapiUser.status === 1 ? 'text-[#5d7b4d]' : 'text-red-600'}`}>
+                    {newapiUser.status === 1 ? '正常' : '异常'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            {/* 信息网格 */}
+            <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-4">
+              <div><span>邮箱：</span><span className="text-[#3e4a32]">{newapiUser.email || '-'}</span></div>
+              <div><span>用户组：</span><span className="text-[#3e4a32]">{newapiUser.group || '-'}</span></div>
+              <div><span>角色：</span><span className="text-[#3e4a32]">{newapiUser.role === 100 ? '超级管理员' : newapiUser.role === 10 ? '管理员' : '用户'}</span></div>
+              <div><span>请求次数：</span><span className="text-[#3e4a32]">{newapiUser.requestCount}</span></div>
+            </div>
+            {/* 额度行 */}
+            <div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+              <div className="rounded border border-[#96b77f]/30 bg-[#eef6e8]/40 px-2 py-1.5">
+                <span className="text-muted-foreground">总额度</span>
+                <p className="font-semibold text-[#3e4a32]">{formatQuota(newapiUser.quota)}</p>
+              </div>
+              <div className="rounded border border-[#96b77f]/30 bg-[#eef6e8]/40 px-2 py-1.5">
+                <span className="text-muted-foreground">已用</span>
+                <p className="font-semibold text-[#3e4a32]">{formatQuota(newapiUser.usedQuota)}</p>
+              </div>
+              <div className="rounded border border-[#96b77f]/30 bg-[#eef6e8]/40 px-2 py-1.5">
+                <span className="text-muted-foreground">令牌剩余</span>
+                <p className="font-semibold text-[#3e4a32]">
+                  {newapiTokenUsage?.unlimitedQuota ? '无限制' : formatQuota(newapiTokenUsage?.remainQuota)}
+                </p>
+              </div>
+              <div className="rounded border border-[#96b77f]/30 bg-[#eef6e8]/40 px-2 py-1.5">
+                <span className="text-muted-foreground">令牌已用</span>
+                <p className="font-semibold text-[#3e4a32]">{formatQuota(newapiTokenUsage?.usedQuota)}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 订阅信息 */}
+      <Card className="mb-3">
+        <CardHeader className="p-3 pb-2">
+          <CardTitle className="text-sm">订阅信息</CardTitle>
+        </CardHeader>
+        <CardContent className="p-3 pt-0">
+          {activeSub ? (
+            <div className="relative overflow-hidden rounded-lg bg-gradient-to-br from-[#4a5a3d] to-[#3e4a32] px-3 py-2.5 text-white shadow-md">
+              <div className="pointer-events-none absolute -right-5 -top-5 h-14 w-14 rounded-full bg-white/5" />
+              <div className="relative flex items-center justify-between">
+                <span className="text-xs font-semibold">
+                  {activePlan?.title || `套餐 #${activeSub.planId}`}
+                </span>
+                <span
+                  className={`rounded-full px-1.5 py-px text-[9px] font-semibold ${
+                    activeSub.status === 'active'
+                      ? 'bg-[#a8d98a]/30 text-[#d4f5b8]'
+                      : 'bg-white/10 text-white/60'
+                  }`}
+                >
+                  {activeSub.status === 'active' ? '有效' : activeSub.status}
+                </span>
+              </div>
+              <div className="relative mt-1.5 grid grid-cols-3 gap-2 text-[10px]">
+                <div>
+                  <span className="text-white/40">总额度</span>
+                  <p className="font-medium text-white/80">{activeSub.amountTotal === 0 ? '无限' : formatQuota(activeSub.amountTotal)}</p>
+                </div>
+                <div>
+                  <span className="text-white/40">已用</span>
+                  <p className="font-medium text-white/80">{formatQuota(activeSub.amountUsed)}</p>
+                </div>
+                {activeSub.endTime > 0 && (
+                  <div>
+                    <span className="text-white/40">到期</span>
+                    <p className="font-medium text-white/80">
+                      {new Date(activeSub.endTime * 1000).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
+                    </p>
+                  </div>
+                )}
+              </div>
+              <div className="relative mt-1.5 grid grid-cols-3 gap-2 text-[10px]">
+                {activeSub.startTime > 0 && (
+                  <div>
+                    <span className="text-white/40">开始</span>
+                    <p className="font-medium text-white/80">
+                      {new Date(activeSub.startTime * 1000).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
+                    </p>
+                  </div>
+                )}
+                {newapiSubscription?.billingPreference && (
+                  <div>
+                    <span className="text-white/40">计费</span>
+                    <p className="font-medium text-white/80">{billingLabel(newapiSubscription.billingPreference)}</p>
+                  </div>
+                )}
+                {activePlan && (
+                  <div>
+                    <span className="text-white/40">时长/价格</span>
+                    <p className="font-medium text-white/80">
+                      {durationLabel(activePlan.durationUnit, activePlan.durationValue)} · {activePlan.priceAmount}{activePlan.currency?.toUpperCase() || 'CNY'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between rounded-lg border border-dashed border-[#96b77f]/40 px-3 py-2.5 text-xs">
+              <div>
+                <span className="font-medium text-[#5d6b4d]">未订阅任何套餐</span>
+                <span className="ml-2 text-muted-foreground">订阅可获得更多额度</span>
+              </div>
+              <a
+                href="https://new-api.chaoxi.live/console/topup"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 rounded bg-[#d4e4c1]/80 px-2.5 py-1 text-[11px] font-medium text-[#4a5a3d] hover:bg-[#d4e4c1]"
+              >
+                去订阅
+              </a>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 调用日志 */}
+      <Card>
+        <CardHeader className="p-3 pb-2">
+          <CardTitle className="text-sm">调用日志</CardTitle>
+          <p className="text-[11px] text-muted-foreground">共 {newapiLogsTotal} 条</p>
+        </CardHeader>
+        <CardContent className="p-3 pt-0">
+          {newapiLogs.length === 0 ? (
+            <p className="py-5 text-center text-xs text-muted-foreground">暂无调用记录</p>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-[10px] text-muted-foreground">
+                      <th className="pb-1.5 pr-2 font-medium">时间</th>
+                      <th className="pb-1.5 pr-2 font-medium">模型</th>
+                      <th className="pb-1.5 pr-2 font-medium text-right">额度</th>
+                      <th className="pb-1.5 pr-2 font-medium text-right">输入</th>
+                      <th className="pb-1.5 pr-2 font-medium text-right">输出</th>
+                      <th className="pb-1.5 pr-2 font-medium text-right">耗时</th>
+                      <th className="pb-1.5 font-medium">计费</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {newapiLogs.map((log, idx) => (
+                      <tr key={`${log.id}-${idx}`} className="border-b border-border/30 last:border-0">
+                        <td className="py-1.5 pr-2 whitespace-nowrap text-[10px] text-muted-foreground">
+                          {formatTime(log.createdAt)}
+                        </td>
+                        <td className="py-1.5 pr-2 font-medium text-[#3e4a32]">
+                          {log.modelName}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums">
+                          {log.quota}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums text-muted-foreground">
+                          {log.promptTokens}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums text-muted-foreground">
+                          {log.completionTokens}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right tabular-nums text-muted-foreground">
+                          {log.useTime}s
+                        </td>
+                        <td className="py-1.5 text-[10px] text-muted-foreground">
+                          {log.billingSource === 'subscription' ? '订阅' : log.billingSource || '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {totalPages > 1 && (
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={newapiLogsPage === 0}
+                    onClick={() => void newapiFetchLogs(newapiLogsPage - 1, 20)}
+                  >
+                    上一页
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    {newapiLogsPage + 1} / {totalPages}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={newapiLogsPage >= totalPages - 1}
+                    onClick={() => void newapiFetchLogs(newapiLogsPage + 1, 20)}
+                  >
+                    下一页
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </>
+  )
+}
+
+// ── Main page ──
+
+export function SettingsPage(): React.JSX.Element {
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings)
+  const saveSettings = useSettingsStore((s) => s.saveSettings)
+  const setVerificationMessage = useSettingsStore((s) => s.setVerificationMessage)
+  const chooseStoragePath = useSettingsStore((s) => s.chooseStoragePath)
+  const newapiFetchStatus = useSettingsStore((s) => s.newapiFetchStatus)
+  const newapiLoggedIn = useSettingsStore((s) => s.newapiLoggedIn)
+  const newapiModels = useSettingsStore((s) => s.newapiModels)
+  const newapiFetchModels = useSettingsStore((s) => s.newapiFetchModels)
+  const modelConfigs = useSettingsStore((s) => s.modelConfigs)
+  const settings = useSettingsStore((s) => s.settings)
+  const { success, error, info } = useToastStore()
+  const { lang, setLang, t } = useLang()
+  const [settingsLoginOpen, setSettingsLoginOpen] = useState(false)
+  const [searchParams] = useSearchParams()
+  const initialTab = searchParams.get('tab') || 'general'
+  const [activeTab, setActiveTab] = useState(initialTab)
+
+  const [storagePath, setStoragePath] = useState(() => settings?.storagePath || '')
+  const [timeoutSeconds, setTimeoutSeconds] = useState<
+    Record<ConfigurableModelTimeoutProfile, number>
+  >(() => createTimeoutSeconds(settings?.timeouts))
+  const [savingTimeouts, setSavingTimeouts] = useState(false)
+  const [stylesCloudUrl, setStylesCloudUrl] = useState(() => settings?.stylesCloudUrl || '')
+
+  const activeModel = modelConfigs.find((c) => c.active)?.model || ''
+  const visionModelId = settings?.visionModelId || ''
+
+  // 切到模型接入 tab 时拉取模型列表
+  useEffect(() => {
+    if (activeTab === 'model' && newapiLoggedIn) {
+      void newapiFetchModels()
+    }
+  }, [activeTab, newapiLoggedIn, newapiFetchModels])
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      await Promise.all([fetchSettings(), newapiFetchStatus()])
+      if (!active) return
+      const s = useSettingsStore.getState().settings
+      setStoragePath(s?.storagePath || '')
+      setTimeoutSeconds(createTimeoutSeconds(s?.timeouts))
+      setStylesCloudUrl(s?.stylesCloudUrl || '')
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [fetchSettings, newapiFetchStatus])
+
+  const timeoutFields = useMemo(
+    () =>
+      [
+        { profile: 'planning', label: t('settings.timeoutPlanning'), hint: t('settings.timeoutPlanningHint'), min: 120 },
+        { profile: 'design', label: t('settings.timeoutDesign'), hint: t('settings.timeoutDesignHint'), min: 120 },
+        { profile: 'agent', label: t('settings.timeoutAgent'), hint: t('settings.timeoutAgentHint'), min: 300 },
+        { profile: 'document', label: t('settings.timeoutDocument'), hint: t('settings.timeoutDocumentHint'), min: 300 }
+      ] as const,
+    [t]
+  )
+
+  const handleTimeoutChange = useCallback(
+    (profile: ConfigurableModelTimeoutProfile, value: string) => {
+      setTimeoutSeconds((current) => ({
+        ...current,
+        [profile]: modelTimeoutMsToSeconds(Number(value) * 1000, profile)
+      }))
+      setVerificationMessage(null)
+    },
+    [setVerificationMessage]
+  )
+
+  const handleSaveTimeouts = useCallback(async () => {
     setSavingTimeouts(true)
     setVerificationMessage(null)
     try {
       await saveSettings({
         timeouts: Object.fromEntries(
-          CONFIGURABLE_MODEL_TIMEOUT_PROFILES.map((profile) => [
-            profile,
-            timeoutSeconds[profile] * 1000
-          ])
+          CONFIGURABLE_MODEL_TIMEOUT_PROFILES.map((profile) => [profile, timeoutSeconds[profile] * 1000])
         ) as Record<ConfigurableModelTimeoutProfile, number>
       })
       const saveError = useSettingsStore.getState().verificationMessage
@@ -282,244 +649,9 @@ export function SettingsPage(): React.JSX.Element {
     } finally {
       setSavingTimeouts(false)
     }
-  }
+  }, [timeoutSeconds, saveSettings, setVerificationMessage, success, error, t])
 
-  const handleVerify = async (): Promise<void> => {
-    if (!modelForm.apiKey.trim()) {
-      warning(t('settings.fillApiKey'))
-      return
-    }
-    if (!modelForm.model.trim()) {
-      warning(t('settings.fillModel'))
-      return
-    }
-
-    setVerifying(true)
-    setVerificationMessage(null)
-    try {
-      const valid = await verifyApiKey(
-        modelForm.provider,
-        modelForm.apiKey,
-        modelForm.model,
-        modelForm.baseUrl,
-        modelForm.maxTokens,
-        resolveModelTimeoutMs(undefined, 'verify')
-      )
-      const verifyMessage = useSettingsStore.getState().verificationMessage
-      if (valid) {
-        success(t('settings.verifyPassed'), {
-          description: verifyMessage || t('settings.verifyPassedDescription')
-        })
-      } else {
-        error(t('settings.verifyFailed'), {
-          description: verifyMessage || t('settings.verifyFailedDescription')
-        })
-      }
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  const handleActivateModel = async (id: string): Promise<void> => {
-    setActivatingId(id)
-    setVerificationMessage(null)
-    try {
-      await setActiveModelConfig(id)
-      const activateError = useSettingsStore.getState().verificationMessage
-      if (activateError) {
-        error(t('settings.activateModelFailed'), { description: activateError })
-        return
-      }
-      success(t('settings.activeModelUpdated'))
-    } finally {
-      setActivatingId(null)
-    }
-  }
-
-  const handleDeleteModel = async (config: ModelConfig): Promise<void> => {
-    if (!window.confirm(t('settings.deleteModelConfirm', { name: config.name }))) return
-    setDeletingId(config.id)
-    setVerificationMessage(null)
-    try {
-      await deleteModelConfig(config.id)
-      const deleteError = useSettingsStore.getState().verificationMessage
-      if (deleteError) {
-        error(t('settings.deleteModelFailed'), { description: deleteError })
-        return
-      }
-      info(t('settings.modelDeleted'))
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
-  const handleVisionModelChange = async (id: string): Promise<void> => {
-    const value = id === '__default__' ? '' : id
-    setVisionModelId(value)
-    setVerificationMessage(null)
-    try {
-      await saveSettings({ visionModelId: value })
-      const saveError = useSettingsStore.getState().verificationMessage
-      if (saveError) {
-        error(t('settings.saveFailed'), { description: saveError })
-        return
-      }
-      success(t('settings.saved'))
-    } catch {
-      error(t('settings.saveFailed'))
-    }
-  }
-
-  const handleStylesCloudUrlSave = async (): Promise<void> => {
-    setVerificationMessage(null)
-    try {
-      await saveSettings({ stylesCloudUrl })
-      const saveError = useSettingsStore.getState().verificationMessage
-      if (saveError) {
-        error(t('settings.saveFailed'), { description: saveError })
-        return
-      }
-      success(t('settings.saved'))
-    } catch {
-      error(t('settings.saveFailed'))
-    }
-  }
-
-  // ---------- NewAPI 处理函数 ----------
-  const handleNewapiLogin = async (): Promise<void> => {
-    if (!newapiUsernameInput.trim()) {
-      warning(t('settings.newapiFillUsername'))
-      return
-    }
-    if (!newapiPasswordInput.trim()) {
-      warning(t('settings.newapiFillPassword'))
-      return
-    }
-    const ok = await newapiLogin(newapiUsernameInput.trim(), newapiPasswordInput.trim())
-    if (ok) {
-      success(t('settings.newapiLoggedIn'))
-      // 登录成功后自动拉取模型、用量、订阅
-      await Promise.all([
-        newapiFetchModels(),
-        newapiFetchTokenUsage(),
-        newapiFetchSubscription(),
-        newapiFetchLogs()
-      ])
-    } else {
-      const msg = useSettingsStore.getState().newapiVerificationMessage
-      error(t('settings.newapiLoginFailed'), { description: msg || '' })
-    }
-  }
-
-  const handleNewapiRegister = async (): Promise<void> => {
-    if (!newapiUsernameInput.trim()) {
-      warning(t('settings.newapiFillUsername'))
-      return
-    }
-    if (!newapiPasswordInput.trim()) {
-      warning(t('settings.newapiFillPassword'))
-      return
-    }
-    try {
-      const { ipc: ipcClient } = await import('@renderer/lib/ipc')
-      const result = await ipcClient.newapiRegister({
-        username: newapiUsernameInput.trim(),
-        password: newapiPasswordInput.trim(),
-        email: newapiEmailInput.trim() || undefined
-      })
-      if (result.success) {
-        success(t('settings.newapiRegisterSuccess'))
-      } else {
-        error(t('settings.newapiRegisterFailed'), { description: result.message || '' })
-      }
-    } catch (err) {
-      error(t('settings.newapiRegisterFailed'), {
-        description: err instanceof Error ? err.message : ''
-      })
-    }
-  }
-
-  const handleNewapiLogout = async (): Promise<void> => {
-    if (!window.confirm(t('settings.newapiLogoutConfirm'))) return
-    await newapiLogout()
-    setNewapiUsernameInput('')
-    setNewapiPasswordInput('')
-    setNewapiEmailInput('')
-    info(t('settings.newapiNotLoggedIn'))
-  }
-
-  const handleNewapiFetchModels = async (): Promise<void> => {
-    await newapiFetchModels()
-    const msg = useSettingsStore.getState().newapiVerificationMessage
-    if (msg) {
-      error(msg)
-    }
-  }
-
-  const handleNewapiSetModel = async (model: string): Promise<void> => {
-    setNewapiSelectedModel(model)
-    const ok = await newapiSetModel(model)
-    if (ok) {
-      success(t('settings.newapiSetModelSuccess'), { description: model })
-    } else {
-      error(t('settings.newapiSetModelFailed'))
-    }
-  }
-
-  const handleNewapiRefreshUser = async (): Promise<void> => {
-    await newapiRefreshUser()
-    const msg = useSettingsStore.getState().newapiVerificationMessage
-    if (msg) {
-      error(msg)
-    } else {
-      success(t('settings.saved'))
-    }
-  }
-
-  const handleNewapiFetchLogs = async (): Promise<void> => {
-    await newapiFetchLogs()
-    const msg = useSettingsStore.getState().newapiVerificationMessage
-    if (msg) {
-      error(msg)
-    }
-  }
-
-  const handleNewapiFetchTokenUsage = async (): Promise<void> => {
-    await newapiFetchTokenUsage()
-    const msg = useSettingsStore.getState().newapiVerificationMessage
-    if (msg) {
-      error(msg)
-    }
-  }
-
-  const handleNewapiFetchSubscription = async (): Promise<void> => {
-    await newapiFetchSubscription()
-    const msg = useSettingsStore.getState().newapiVerificationMessage
-    if (msg) {
-      error(msg)
-    }
-  }
-
-  /** 格式化角色名称 */
-  const formatRole = (role: number): string => {
-    if (role === 100) return t('settings.newapiRoleAdmin')
-    if (role === 1) return t('settings.newapiRoleUser')
-    return t('settings.newapiRoleGuest')
-  }
-
-  /** 格式化时间戳 */
-  const formatTimestamp = (ts: number): string => {
-    const date = new Date(ts * 1000)
-    return date.toLocaleString()
-  }
-
-  /** 格式化时长 */
-  const formatDuration = (ms: number): string => {
-    if (ms < 1000) return `${ms} ${t('settings.newapiDurationUnit')}`
-    return `${(ms / 1000).toFixed(2)}s`
-  }
-
-  const handleChoosePath = async (): Promise<void> => {
+  const handleChoosePath = useCallback(async () => {
     const path = await chooseStoragePath()
     const pathError = useSettingsStore.getState().storagePathError
     if (pathError) {
@@ -537,7 +669,22 @@ export function SettingsPage(): React.JSX.Element {
       setStoragePath(path)
       info(t('settings.storagePathUpdated'), { description: path })
     }
-  }
+  }, [chooseStoragePath, saveSettings, setVerificationMessage, error, info, t])
+
+  const handleStylesCloudUrlSave = useCallback(async () => {
+    setVerificationMessage(null)
+    try {
+      await saveSettings({ stylesCloudUrl })
+      const saveError = useSettingsStore.getState().verificationMessage
+      if (saveError) {
+        error(t('settings.saveFailed'), { description: saveError })
+        return
+      }
+      success(t('settings.saved'))
+    } catch {
+      error(t('settings.saveFailed'))
+    }
+  }, [stylesCloudUrl, saveSettings, setVerificationMessage, success, error, t])
 
   return (
     <div className="mx-auto max-w-4xl p-6">
@@ -550,12 +697,12 @@ export function SettingsPage(): React.JSX.Element {
         </h1>
       </div>
 
-      <Tabs defaultValue="general">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="general">{t('settings.generalTab')}</TabsTrigger>
           <TabsTrigger value="model">{t('settings.modelTab')}</TabsTrigger>
-          <TabsTrigger value="newapi">{t('settings.newapiTab')}</TabsTrigger>
           <TabsTrigger value="advanced">{t('settings.advancedTab')}</TabsTrigger>
+          {newapiLoggedIn && <TabsTrigger value="usage">账户信息</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="general" className="space-y-4">
@@ -597,7 +744,7 @@ export function SettingsPage(): React.JSX.Element {
                   />
                   <Button
                     variant="secondary"
-                    onClick={handleChoosePath}
+                    onClick={() => void handleChoosePath()}
                     className="h-10 min-w-[96px] shrink-0 rounded-lg border border-[#7ea06f]/45 px-4"
                   >
                     <FolderSearch className="mr-1.5 h-4 w-4" />
@@ -611,471 +758,28 @@ export function SettingsPage(): React.JSX.Element {
         </TabsContent>
 
         <TabsContent value="model">
-          <Card className="mb-4">
-            <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-              <div>
-                <CardTitle className="text-base">{t('settings.modelAccess')}</CardTitle>
-                {activeModelConfig && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('settings.currentActiveModel', { name: activeModelConfig.name })}
-                  </p>
-                )}
-              </div>
-              <Button size="sm" onClick={openCreateModelDialog}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                {t('settings.addModel')}
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-2.5 p-5 pt-0">
-              {modelConfigs.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[#d8ccb5]/85 bg-[#fff9ef]/70 p-6 text-sm text-muted-foreground">
-                  {t('settings.noModels')}
-                </div>
-              ) : (
-                modelConfigs.map((config) => (
-                  <div
-                    key={config.id}
-                    className={
-                      config.active
-                        ? 'flex flex-col gap-3 rounded-lg border border-[#96b77f]/80 bg-[#eef6e8] p-3 shadow-[inset_3px_0_0_#6f8f64] sm:flex-row sm:items-center sm:justify-between'
-                        : 'flex flex-col gap-3 rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3 sm:flex-row sm:items-center sm:justify-between'
-                    }
-                  >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {config.active && <CheckCircle2 className="h-4 w-4 text-[#5d7b4d]" />}
-                        <p className="font-medium text-[#33402a]">{config.name}</p>
-                        <span className="rounded-full bg-[#e9efde] px-2 py-0.5 text-[11px] uppercase text-[#506141]">
-                          {config.provider}
-                        </span>
-                      </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">{config.model}</p>
-                      {config.baseUrl && (
-                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {config.baseUrl}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant={config.active ? 'secondary' : 'outline'}
-                        disabled={config.active || activatingId === config.id}
-                        onClick={() => void handleActivateModel(config.id)}
-                      >
-                        {config.active ? t('settings.activeModel') : t('settings.activateModel')}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEditModelDialog(config)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={deletingId === config.id}
-                        onClick={() => void handleDeleteModel(config)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="p-5 pb-3">
-              <CardTitle className="text-base">{t('settings.visionModel')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 p-5 pt-0">
-              <div>
-                <Select
-                  value={visionModelId || '__default__'}
-                  onValueChange={(v) => void handleVisionModelChange(v)}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder={t('settings.visionModelFollowDefault')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">{t('settings.visionModelFollowDefault')}</SelectItem>
-                    {modelConfigs.map((config) => (
-                      <SelectItem key={config.id} value={config.id}>
-                        {config.name}
-                        <span className="ml-2 text-xs text-muted-foreground">({config.provider})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-xs text-muted-foreground">{t('settings.visionModelHint')}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ---------- NewAPI 云服务 Tab ---------- */}
-        <TabsContent value="newapi" className="space-y-4">
           {!newapiLoggedIn ? (
-            /* 登录/注册面板 */
             <Card>
               <CardHeader className="p-5 pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Cloud className="h-5 w-5 text-[#5d7b4d]" />
-                  {t('settings.newapiTitle')}
-                </CardTitle>
+                <CardTitle className="text-base">模型接入</CardTitle>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {t('settings.newapiDescription')}
+                  请先登录潮汐平台账号，登录后可配置 AI 模型。
                 </p>
               </CardHeader>
-              <CardContent className="space-y-3 p-5 pt-0">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {t('settings.newapiUsername')}
-                  </label>
-                  <Input
-                    value={newapiUsernameInput}
-                    onChange={(e) => setNewapiUsernameInput(e.target.value)}
-                    placeholder={t('settings.newapiUsername')}
-                    className="h-10"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {t('settings.newapiPassword')}
-                  </label>
-                  <Input
-                    type="password"
-                    value={newapiPasswordInput}
-                    onChange={(e) => setNewapiPasswordInput(e.target.value)}
-                    placeholder={t('settings.newapiPassword')}
-                    className="h-10"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void handleNewapiLogin()
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {t('settings.newapiEmail')}
-                  </label>
-                  <Input
-                    value={newapiEmailInput}
-                    onChange={(e) => setNewapiEmailInput(e.target.value)}
-                    placeholder={t('settings.newapiEmail')}
-                    className="h-10"
-                  />
-                </div>
-                <div className="flex gap-2 pt-2">
-                  <Button
-                    onClick={() => void handleNewapiLogin()}
-                    disabled={newapiLoading}
-                    className="flex-1"
-                  >
-                    {newapiLoading ? t('settings.newapiLoggingIn') : t('settings.newapiLogin')}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => void handleNewapiRegister()}
-                    disabled={newapiLoading}
-                    className="flex-1"
-                  >
-                    {t('settings.newapiRegister')}
-                  </Button>
-                </div>
-                {newapiVerificationMessage && (
-                  <p className="text-sm text-red-600">{newapiVerificationMessage}</p>
-                )}
+              <CardContent className="p-5 pt-0">
+                <Button onClick={() => setSettingsLoginOpen(true)}>
+                  <LogIn className="mr-1.5 h-4 w-4" />
+                  登录
+                </Button>
               </CardContent>
             </Card>
           ) : (
-            <>
-              {/* 已登录：账户信息 */}
-              <Card>
-                <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <User className="h-5 w-5 text-[#5d7b4d]" />
-                    {t('settings.newapiAccountInfo')}
-                  </CardTitle>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void handleNewapiRefreshUser()}
-                      disabled={newapiLoading}
-                    >
-                      <RefreshCw className={`mr-1.5 h-4 w-4 ${newapiLoading ? 'animate-spin' : ''}`} />
-                      {newapiLoading ? t('settings.newapiRefreshing') : t('settings.newapiRefreshUser')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleNewapiLogout()}
-                    >
-                      <LogOut className="mr-1.5 h-4 w-4" />
-                      {t('settings.newapiLogout')}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-5 pt-0">
-                  {newapiUser && (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiUsername')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">{newapiUser.username}</p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiRole')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">{formatRole(newapiUser.role)}</p>
-                      </div>
-                      <div className="rounded-lg border border-[#96b77f]/80 bg-[#eef6e8] p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiQuota')}</p>
-                        <p className="mt-1 font-semibold text-[#3e5a30]">
-                          {newapiUser.unlimitedQuota
-                            ? t('settings.newapiUnlimited')
-                            : formatQuota(newapiUser.quota)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiUsedQuota')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">{formatQuota(newapiUser.usedQuota)}</p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiRemainQuota')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">
-                          {newapiUser.unlimitedQuota
-                            ? t('settings.newapiUnlimited')
-                            : formatQuota(newapiUser.remainQuota)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiRequestCount')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">{newapiUser.requestCount}</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Token 用量 */}
-              <Card>
-                <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <BarChart3 className="h-5 w-5 text-[#5d7b4d]" />
-                    {t('settings.newapiTokenUsage')}
-                  </CardTitle>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void handleNewapiFetchTokenUsage()}
-                    disabled={newapiLoading}
-                  >
-                    {t('settings.newapiFetchUsage')}
-                  </Button>
-                </CardHeader>
-                <CardContent className="p-5 pt-0">
-                  {newapiTokenUsage ? (
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-lg border border-[#96b77f]/80 bg-[#eef6e8] p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiQuota')}</p>
-                        <p className="mt-1 font-semibold text-[#3e5a30]">
-                          {newapiTokenUsage.unlimitedQuota
-                            ? t('settings.newapiUnlimited')
-                            : formatQuota(newapiTokenUsage.remainQuota + newapiTokenUsage.usedQuota)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiUsedQuota')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">
-                          {formatQuota(newapiTokenUsage.usedQuota)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-[#d8ccb5]/80 bg-[#fffdf8]/78 p-3">
-                        <p className="text-xs text-muted-foreground">{t('settings.newapiRemainQuota')}</p>
-                        <p className="mt-1 font-medium text-[#33402a]">
-                          {newapiTokenUsage.unlimitedQuota
-                            ? t('settings.newapiUnlimited')
-                            : formatQuota(newapiTokenUsage.remainQuota)}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">{t('settings.newapiFetchUsage')}</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* 模型选择 */}
-              <Card>
-                <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    {t('settings.newapiModelSection')}
-                  </CardTitle>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void handleNewapiFetchModels()}
-                    disabled={newapiLoading}
-                  >
-                    <RefreshCw className={`mr-1.5 h-4 w-4 ${newapiLoading ? 'animate-spin' : ''}`} />
-                    {newapiLoading ? t('settings.newapiFetchingModels') : t('settings.newapiFetchModels')}
-                  </Button>
-                </CardHeader>
-                <CardContent className="space-y-3 p-5 pt-0">
-                  <div>
-                    <Select
-                      value={newapiSelectedModel || '__none__'}
-                      onValueChange={(v) => {
-                        if (v !== '__none__') void handleNewapiSetModel(v)
-                      }}
-                    >
-                      <SelectTrigger className="h-10">
-                        <SelectValue placeholder={t('settings.newapiSelectModel')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {newapiModels.length === 0 ? (
-                          <SelectItem value="__none__" disabled>
-                            {t('settings.newapiFetchModels')}
-                          </SelectItem>
-                        ) : (
-                          newapiModels.map((m) => (
-                            <SelectItem key={m.id} value={m.id}>
-                              {m.id}
-                              <span className="ml-2 text-xs text-muted-foreground">
-                                ({m.ownedBy})
-                              </span>
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* 订阅套餐 */}
-              <Card>
-                <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <CreditCard className="h-5 w-5 text-[#5d7b4d]" />
-                    {t('settings.newapiSubscription')}
-                  </CardTitle>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void handleNewapiFetchSubscription()}
-                    disabled={newapiLoading}
-                  >
-                    {t('settings.newapiFetchSubscription')}
-                  </Button>
-                </CardHeader>
-                <CardContent className="p-5 pt-0">
-                  {newapiSubscription && newapiSubscription.length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {newapiSubscription.map((sub) => {
-                        const plan = newapiPlans?.find((p) => p.id === sub.planId)
-                        const isActive = sub.status === 'active' && sub.endTime * 1000 > Date.now()
-                        return (
-                          <div
-                            key={sub.id}
-                            className={`rounded-lg border p-3 ${
-                              isActive
-                                ? 'border-[#96b77f]/80 bg-[#eef6e8]'
-                                : 'border-[#d8ccb5]/80 bg-[#fffdf8]/78'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <p className="font-medium text-[#33402a]">
-                                {plan?.title || `${t('settings.newapiPlanName')} #${sub.planId}`}
-                              </p>
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] ${
-                                  isActive
-                                    ? 'bg-green-100 text-green-700'
-                                    : 'bg-gray-100 text-gray-500'
-                                }`}
-                              >
-                                {isActive ? t('settings.newapiPlanActive') : t('settings.newapiPlanExpired')}
-                              </span>
-                            </div>
-                            {plan?.subtitle && (
-                              <p className="mt-0.5 text-xs text-muted-foreground">{plan.subtitle}</p>
-                            )}
-                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                              <div>
-                                <span className="text-muted-foreground">{t('settings.newapiPlanTotal')}: </span>
-                                <span className="font-medium">{formatQuota(sub.amountTotal)}</span>
-                              </div>
-                              <div>
-                                <span className="text-muted-foreground">{t('settings.newapiPlanUsed')}: </span>
-                                <span className="font-medium">{formatQuota(sub.amountUsed)}</span>
-                              </div>
-                            </div>
-                            <p className="mt-1 text-[11px] text-muted-foreground">
-                              {t('settings.newapiPlanExpiry')}: {formatTimestamp(sub.endTime)}
-                            </p>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">{t('settings.newapiNoSubscription')}</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* 调用日志 */}
-              <Card>
-                <CardHeader className="flex-row items-center justify-between p-5 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <FileText className="h-5 w-5 text-[#5d7b4d]" />
-                    {t('settings.newapiLogs')}
-                  </CardTitle>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void handleNewapiFetchLogs()}
-                    disabled={newapiLoading}
-                  >
-                    <RefreshCw className={`mr-1.5 h-4 w-4 ${newapiLoading ? 'animate-spin' : ''}`} />
-                    {t('settings.newapiFetchLogs')}
-                  </Button>
-                </CardHeader>
-                <CardContent className="p-5 pt-0">
-                  <p className="mb-3 text-xs text-muted-foreground">{t('settings.newapiLogsHint')}</p>
-                  {newapiLogs.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-[#e3d8c5] text-left text-muted-foreground">
-                            <th className="pb-2 pr-3 font-medium">{t('settings.newapiLogTokenName')}</th>
-                            <th className="pb-2 pr-3 font-medium">{t('settings.newapiLogModel')}</th>
-                            <th className="pb-2 pr-3 font-medium text-right">{t('settings.newapiLogQuota')}</th>
-                            <th className="pb-2 pr-3 font-medium text-right">{t('settings.newapiLogPromptTokens')}</th>
-                            <th className="pb-2 pr-3 font-medium text-right">{t('settings.newapiLogCompletionTokens')}</th>
-                            <th className="pb-2 pr-3 font-medium text-right">{t('settings.newapiLogDuration')}</th>
-                            <th className="pb-2 pr-3 font-medium">{t('settings.newapiLogTime')}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {newapiLogs.map((log) => (
-                            <tr key={log.id} className="border-b border-[#e3d8c5]/50">
-                              <td className="py-2 pr-3 text-[#33402a]">{log.tokenName}</td>
-                              <td className="py-2 pr-3 text-[#33402a]">{log.modelName}</td>
-                              <td className="py-2 pr-3 text-right">{formatQuota(log.quota)}</td>
-                              <td className="py-2 pr-3 text-right">{log.promptTokens}</td>
-                              <td className="py-2 pr-3 text-right">{log.completionTokens}</td>
-                              <td className="py-2 pr-3 text-right">{formatDuration(log.useTime)}</td>
-                              <td className="py-2 pr-3 text-muted-foreground">{formatTimestamp(log.createdAt)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">{t('settings.newapiNoLogs')}</p>
-                  )}
-                </CardContent>
-              </Card>
-            </>
+            <LoggedInPanel
+              models={newapiModels}
+              activeModel={activeModel}
+              visionModelId={visionModelId}
+              t={t}
+            />
           )}
         </TabsContent>
 
@@ -1134,149 +838,19 @@ export function SettingsPage(): React.JSX.Element {
           </Card>
 
           <div className="flex justify-end">
-            <Button onClick={handleSaveTimeouts} disabled={savingTimeouts}>
+            <Button onClick={() => void handleSaveTimeouts()} disabled={savingTimeouts}>
               {savingTimeouts ? t('common.saving') : t('settings.saveTimeouts')}
             </Button>
           </div>
         </TabsContent>
+
+        {newapiLoggedIn && (
+          <TabsContent value="usage">
+            <UsagePanel />
+          </TabsContent>
+        )}
       </Tabs>
-
-      {modelDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[#2d291f]/42 p-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !savingModel) {
-              setModelDialogOpen(false)
-            }
-          }}
-        >
-          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-[#d8ccb5]/85 bg-[#fffaf1] shadow-[0_24px_70px_rgba(53,44,32,0.28)]">
-            <div className="flex items-center justify-between border-b border-[#e3d8c5] px-5 py-4">
-              <h2 className="text-base font-semibold text-[#33402a]">
-                {modelForm.id ? t('settings.editModel') : t('settings.addModel')}
-              </h2>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setModelDialogOpen(false)}
-                disabled={savingModel}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="space-y-3 p-5">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-sm font-medium">
-                    {t('settings.modelName')}
-                  </label>
-                  <Input
-                    value={modelForm.name}
-                    onChange={(e) => updateModelForm({ name: e.target.value })}
-                    placeholder={t('settings.modelNamePlaceholder')}
-                    className="h-8"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium">
-                    {t('settings.providerPreset')}
-                  </label>
-                  <Select
-                    value={modelForm.provider}
-                    onValueChange={(value) =>
-                      updateModelForm({ provider: value === 'anthropic' ? 'anthropic' : 'openai' })
-                    }
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue placeholder={t('settings.providerPlaceholder')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
-                      <SelectItem value="openai">OpenAI</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium">model</label>
-                <Input
-                  placeholder={t('settings.modelPlaceholder')}
-                  value={modelForm.model}
-                  onChange={(e) => updateModelForm({ model: e.target.value })}
-                  className="h-8"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">{t('settings.modelHint')}</p>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium">base_url</label>
-                <Input
-                  placeholder={t('settings.baseUrlPlaceholder')}
-                  value={modelForm.baseUrl}
-                  onChange={(e) => updateModelForm({ baseUrl: e.target.value })}
-                  className="h-8"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">{t('settings.baseUrlHint')}</p>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium">max_tokens</label>
-                <Input
-                  type="number"
-                  min={256}
-                  max={16384}
-                  step={256}
-                  value={modelForm.maxTokens}
-                  onChange={(e) => updateModelForm({ maxTokens: Math.max(256, Math.min(16384, Number(e.target.value) || 4096)) })}
-                  className="h-8"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">{t('settings.maxTokensHint')}</p>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium">api_key</label>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder={t('settings.apiKeyPlaceholder', {
-                      provider: modelForm.provider === 'openai' ? 'OpenAI' : 'Claude'
-                    })}
-                    value={modelForm.apiKey}
-                    onChange={(e) => updateModelForm({ apiKey: e.target.value })}
-                    className="h-8 min-w-0 flex-1"
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={handleVerify}
-                    disabled={verifying}
-                    className="h-8 min-w-[80px] shrink-0 rounded-lg border border-[#7ea06f]/45 px-3 text-xs"
-                  >
-                    <ShieldCheck className="mr-1 h-3.5 w-3.5" />
-                    {verifying ? t('settings.verifying') : t('settings.verify')}
-                  </Button>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">{t('settings.verifyHint')}</p>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 border-t border-[#e3d8c5] px-5 py-4">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setModelDialogOpen(false)}
-                disabled={savingModel}
-              >
-                {t('common.cancel')}
-              </Button>
-              <Button onClick={handleSaveModel} disabled={savingModel}>
-                {savingModel ? t('common.saving') : t('settings.saveModel')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <LoginDialog open={settingsLoginOpen} onOpenChange={setSettingsLoginOpen} />
     </div>
   )
 }
