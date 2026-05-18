@@ -44,7 +44,7 @@ export function Sidebar(): React.JSX.Element {
           <img src={logoUrl} alt="Oh My PPT" className="h-14 w-14 select-none" draggable={false} />
           <h1 className="organic-serif text-[22px] font-semibold leading-none text-[#3e4a32]">Oh My PPT</h1>
         </div>
-        <p className="mt-1 text-xs text-[#7f876e] px-4">{t('nav.tagline')}</p>
+        <p className="mt-1 text-[14px] text-[#7f876e] px-4">{t('nav.tagline')}</p>
       </div>
 
       <nav className="flex-1 space-y-1 px-3 pb-4 pt-5">

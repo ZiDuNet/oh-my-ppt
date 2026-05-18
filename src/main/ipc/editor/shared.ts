@@ -179,6 +179,23 @@ export function normalizeFontWeight(value: unknown): string | null {
   return String(clamped)
 }
 
+export function normalizeOpacity(value: unknown): string | null {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return String(Math.max(0, Math.min(1, Math.round(parsed * 100) / 100)))
+}
+
+export function normalizeObjectFit(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  return ['contain', 'cover', 'fill', 'none', 'scale-down'].includes(text) ? text : null
+}
+
+export function normalizeBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  return null
+}
+
 export const attrEscape = (value: string): string => value.replace(/"/g, '\\"')
 
 export const stableSelectorFor = (pageId: string, blockId: string): string =>
@@ -361,6 +378,90 @@ export function patchElementProperties(
   if (fontWeight) styleMap.set('font-weight', fontWeight)
   if (color || fontSize || fontWeight) {
     target.attr('style', serializeStyle(styleMap))
+  }
+
+  return $.html()
+}
+
+export function patchGenericElementProperties(
+  html: string,
+  selector: string,
+  patch: {
+    text?: string
+    style?: {
+      zIndex?: unknown
+      opacity?: unknown
+      backgroundColor?: unknown
+      color?: unknown
+      fontSize?: unknown
+      fontWeight?: unknown
+      objectFit?: unknown
+    }
+    attrs?: {
+      alt?: unknown
+      poster?: unknown
+      controls?: unknown
+      muted?: unknown
+      loop?: unknown
+      autoplay?: unknown
+    }
+  }
+): string {
+  const $ = cheerio.load(html, { scriptingEnabled: false })
+  let target: cheerio.Cheerio<AnyNode>
+  try {
+    target = $(selector).first()
+  } catch {
+    return html
+  }
+  if (!target || target.length === 0) return html
+
+  if (typeof patch.text === 'string') {
+    const text = normalizeText(patch.text)
+    if (!text) throw new Error('文字不能为空')
+    if (text.length > 500) throw new Error('文字不能超过 500 个字符')
+    if (!hasOnlyEditableTextChildren($, target)) {
+      throw new Error('当前元素包含非文本子元素，暂不支持直接编辑；可以选择更内层的文字。')
+    }
+    target.text(text)
+  }
+
+  const stylePatch = patch.style || {}
+  const styleMap = parseStyle(target.attr('style') || '')
+  const zIndex = typeof stylePatch.zIndex === 'number' ? Math.round(stylePatch.zIndex) : null
+  const opacity = normalizeOpacity(stylePatch.opacity)
+  const backgroundColor = normalizeColor(stylePatch.backgroundColor)
+  const color = normalizeColor(stylePatch.color)
+  const fontSize = normalizeFontSize(stylePatch.fontSize)
+  const fontWeight = normalizeFontWeight(stylePatch.fontWeight)
+  const objectFit = normalizeObjectFit(stylePatch.objectFit)
+  if (zIndex !== null && zIndex >= 0 && zIndex <= 9999) styleMap.set('z-index', String(zIndex))
+  if (opacity) styleMap.set('opacity', opacity)
+  if (backgroundColor) styleMap.set('background-color', backgroundColor)
+  if (color) styleMap.set('color', color)
+  if (fontSize) styleMap.set('font-size', fontSize)
+  if (fontWeight) styleMap.set('font-weight', fontWeight)
+  if (objectFit) styleMap.set('object-fit', objectFit)
+  if (
+    zIndex !== null ||
+    opacity ||
+    backgroundColor ||
+    color ||
+    fontSize ||
+    fontWeight ||
+    objectFit
+  ) {
+    target.attr('style', serializeStyle(styleMap))
+  }
+
+  const attrs = patch.attrs || {}
+  if (typeof attrs.alt === 'string') target.attr('alt', attrs.alt.slice(0, 500))
+  if (typeof attrs.poster === 'string') target.attr('poster', attrs.poster.slice(0, 1000))
+  for (const name of ['controls', 'muted', 'loop', 'autoplay'] as const) {
+    const value = normalizeBoolean(attrs[name])
+    if (value === null) continue
+    if (value) target.attr(name, '')
+    else target.removeAttr(name)
   }
 
   return $.html()

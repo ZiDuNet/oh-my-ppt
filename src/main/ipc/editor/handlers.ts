@@ -11,8 +11,10 @@ import {
   normalizeText,
   patchDraggedElementStyle,
   patchElementProperties,
+  patchGenericElementProperties,
   ensureElementAnchorInHtml,
-  patchAddElement
+  patchAddElement,
+  stableSelectorFor
 } from './shared'
 
 export function registerEditorHandlers(ctx: IpcContext): void {
@@ -123,6 +125,7 @@ export function registerEditorHandlers(ctx: IpcContext): void {
       htmlPath?: unknown
       dragEdits?: unknown
       textEdits?: unknown
+      propertyEdits?: unknown
       deletes?: unknown
       addElements?: unknown
       prompt?: unknown
@@ -136,6 +139,7 @@ export function registerEditorHandlers(ctx: IpcContext): void {
 
     const rawDrag = Array.isArray(record.dragEdits) ? record.dragEdits : []
     const rawText = Array.isArray(record.textEdits) ? record.textEdits : []
+    const rawProperty = Array.isArray(record.propertyEdits) ? record.propertyEdits : []
     const rawDeletes = Array.isArray(record.deletes) ? record.deletes : []
     const rawAddElements = Array.isArray(record.addElements) ? record.addElements : []
 
@@ -148,6 +152,7 @@ export function registerEditorHandlers(ctx: IpcContext): void {
 
     let deleteCount = 0
     let addCount = 0
+    const warnings: string[] = []
     await withHtmlFileLock(safeHtmlPath, async () => {
       let html = await fs.promises.readFile(safeHtmlPath, 'utf-8')
 
@@ -239,6 +244,47 @@ export function registerEditorHandlers(ctx: IpcContext): void {
         })
       }
 
+      // Apply generic property edits
+      for (const item of rawProperty) {
+        if (!item || typeof item !== 'object') continue
+        const e = item as {
+          selector?: unknown
+          blockId?: unknown
+          patch?: unknown
+        }
+        const selector = typeof e.selector === 'string' ? e.selector.trim() : ''
+        const blockId = typeof e.blockId === 'string' ? e.blockId.trim() : ''
+        if (!selector && !blockId) continue
+        const $ = cheerio.load(html, { scriptingEnabled: false })
+        const blockSelector = blockId ? stableSelectorFor(pageId, blockId) : ''
+        const resolvedSelector =
+          blockSelector && $(blockSelector).first().length > 0
+            ? blockSelector
+            : selector && $(selector).first().length > 0
+              ? selector
+              : ''
+        if (!resolvedSelector) {
+          warnings.push(`属性编辑目标不存在：${blockId || selector}`)
+          continue
+        }
+        const patch = e.patch && typeof e.patch === 'object' ? (e.patch as Record<string, unknown>) : {}
+        const style = patch.style && typeof patch.style === 'object' ? patch.style : undefined
+        const attrs = patch.attrs && typeof patch.attrs === 'object' ? patch.attrs : undefined
+        try {
+          html = patchGenericElementProperties(html, resolvedSelector, {
+            text: typeof patch.text === 'string' ? patch.text : undefined,
+            style: style as Parameters<typeof patchGenericElementProperties>[2]['style'],
+            attrs: attrs as Parameters<typeof patchGenericElementProperties>[2]['attrs']
+          })
+        } catch (error) {
+          warnings.push(
+            error instanceof Error
+              ? `属性编辑失败：${error.message}`
+              : `属性编辑失败：${blockId || selector}`
+          )
+        }
+      }
+
       await fs.promises.writeFile(safeHtmlPath, html, 'utf-8')
     })
 
@@ -246,6 +292,7 @@ export function registerEditorHandlers(ctx: IpcContext): void {
     const projectDir = await resolveSessionProjectDir(sessionId)
     const dragCount = rawDrag.length
     const textCount = rawText.length
+    const propertyCount = rawProperty.length
     const prompt = typeof record.prompt === 'string' ? record.prompt : '手动调整'
     await new GitHistoryService(db).recordOperation({
       sessionId,
@@ -253,10 +300,10 @@ export function registerEditorHandlers(ctx: IpcContext): void {
       type: 'edit',
       scope: 'selector',
       prompt,
-      metadata: { pageId, dragCount, textCount, deleteCount, addCount }
+      metadata: { pageId, dragCount, textCount, propertyCount, deleteCount, addCount }
     })
 
-    return { success: true, dragCount, textCount, deleteCount, addCount }
+    return { success: true, dragCount, textCount, propertyCount, deleteCount, addCount, warnings }
   })
 
   // ─── drag-editor:update-element-layout ──────────────────

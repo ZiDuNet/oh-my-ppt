@@ -42,6 +42,7 @@
 - [Opening Unsigned Apps](#unsigned-apps)
 - [Feedback & Requests](#feedback)
 - [Reference](#reference)
+- [Sponsors](#sponsors)
 - [Contributors](#contributors)
 - [License](#license)
 
@@ -84,6 +85,7 @@ Output is pure HTML slides: instant browser preview, no extra software, easy to 
 - 🧩 **More reliable slide layout** — Generation follows a fixed 16:9 canvas and content-height budget to reduce overflow
 - 🔄 **Version history rollback** — Every edit is automatically saved, roll back to any previous version with one click, never worry about mistakes
 - 📦 **One-click packaging** — Bundle your HTML deck into a single executable file, double-click to open and present anywhere, no installation needed (just a browser)
+- 💾 **AI-generated creative deck import & export** — Export your AI-generated creative deck from the editing page and import it on another computer to continue editing, making cross-device collaboration seamless
 
 
 <p>
@@ -238,6 +240,13 @@ I will keep following up and improving the experience.
 
 - [ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
 - [html-ppt-skill](https://github.com/lewislulu/html-ppt-skill)
+
+<a id="sponsors"></a>
+## 💖 Sponsors
+
+Special thanks to everyone who has supported this project! Your generosity keeps Oh My PPT alive and growing.
+
+See [SponsorsList.md](./SponsorsList.md) for the full list of sponsors.
 
 <a id="contributors"></a>
 ## Contributors

@@ -1,4 +1,5 @@
 import {
+  Archive,
   ChevronDown,
   ExternalLink,
   FileDown,
@@ -35,6 +36,7 @@ export function SessionToolbar({
   onExportPdf,
   onExportPng,
   onExportPptx,
+  onExportSessionZip,
   onExportSlidePack,
   onOpenHistory,
   onOpenPreview,
@@ -47,9 +49,11 @@ export function SessionToolbar({
   canRevealFile: boolean
   onExportPdf: () => void
   onExportPng: () => void
-  onExportPptx: (
-    options?: { imageOnly?: boolean; embedFonts?: boolean | 'auto' | 'always' | 'never' }
-  ) => void
+  onExportPptx: (options?: {
+    imageOnly?: boolean
+    embedFonts?: boolean | 'auto' | 'always' | 'never'
+  }) => void
+  onExportSessionZip: () => void
   onExportSlidePack: () => void
   onOpenHistory: () => void
   onOpenPreview: () => void
@@ -61,7 +65,14 @@ export function SessionToolbar({
   const isExportingPng = useSessionDetailUiStore((state) => state.isExportingPng)
   const isExportingPptx = useSessionDetailUiStore((state) => state.isExportingPptx)
   const isExportingSlidePack = useSessionDetailUiStore((state) => state.isExportingSlidePack)
-  const isExporting = isExportingPdf || isExportingPng || isExportingPptx || isExportingSlidePack
+  const isExportingSessionZip = useSessionDetailUiStore((state) => state.isExportingSessionZip)
+  const isExportingPackage = isExportingSlidePack || isExportingSessionZip
+  const isExporting =
+    isExportingPdf ||
+    isExportingPng ||
+    isExportingPptx ||
+    isExportingSlidePack ||
+    isExportingSessionZip
 
   return (
     <>
@@ -93,7 +104,7 @@ export function SessionToolbar({
               variant="outline"
               size="sm"
               className={cn(toolbarButtonClass, 'gap-1')}
-              disabled={isExportingPptx || isExportingSlidePack}
+              disabled={isExportingPptx || isExportingPackage}
             >
               {isExportingPptx ? (
                 <Loader2 className={cn(toolbarIconClass, 'animate-spin')} />
@@ -117,26 +128,50 @@ export function SessionToolbar({
         </DropdownMenu>
       )}
       {hasPages && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={toolbarButtonClass}
-              onClick={onExportSlidePack}
-              disabled={isExportingSlidePack}
-            >
-              {isExportingSlidePack ? (
-                <Loader2 className={cn(toolbarIconClass, 'animate-spin')} />
-              ) : (
-                <Package className={toolbarIconClass} />
-              )}
-              {t('sessionDetail.exportSlidePack')}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{t('sessionDetail.exportSlidePackTooltip')}</TooltipContent>
-        </Tooltip>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={cn(toolbarButtonClass, 'gap-1')}
+                  disabled={isExportingPackage}
+                >
+                  {isExportingPackage ? (
+                    <Loader2 className={cn(toolbarIconClass, 'animate-spin')} />
+                  ) : (
+                    <Package className={toolbarIconClass} />
+                  )}
+                  {t('sessionDetail.exportPackage')}
+                  {!isExportingPackage && <ChevronDown className="h-3 w-3" />}
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{t('sessionDetail.exportPackageTooltip')}</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" className="w-72">
+            <DropdownMenuItem className="items-start" onClick={onExportSlidePack}>
+              <Package className={cn(dropdownItemIconClass, 'mt-0.5')} />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 whitespace-normal">
+                <span>{t('sessionDetail.exportSlidePack')}</span>
+                <span className="text-[11px] leading-snug text-[#9a8f80]">
+                  {t('sessionDetail.exportSlidePackDescription')}
+                </span>
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem className="items-start" onClick={onExportSessionZip}>
+              <Archive className={cn(dropdownItemIconClass, 'mt-0.5')} />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 whitespace-normal">
+                <span>{t('sessionDetail.exportSessionZip')}</span>
+                <span className="text-[11px] leading-snug text-[#9a8f80]">
+                  {t('sessionDetail.exportSessionZipDescription')}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
       {hasPages && (
         <Button

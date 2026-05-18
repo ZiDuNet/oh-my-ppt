@@ -6,6 +6,7 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
 (() => {
   const STATE_KEY = "__pptInspectorState";
   const STYLE_ID = "ppt-inspector-style";
+  const OVERLAY_ID = "ppt-inspector-highlight-overlay";
   const HIGHLIGHT_CLASS = "ppt-inspector-highlight";
   const LOG_PREFIX = "${INSPECTOR_CONSOLE_PREFIX}";
   const MODE = "${mode}";
@@ -190,6 +191,44 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     );
   };
 
+  const isRenderedFormulaNode = (element) => {
+    if (!(element instanceof Element)) return false;
+    return Boolean(element.closest(".katex, .katex-display, math, annotation, semantics"));
+  };
+
+  const isBlockLikeElement = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const tag = element.tagName ? element.tagName.toLowerCase() : "";
+    if (["div", "p", "section", "article", "figure", "figcaption", "li", "td", "th", "span"].includes(tag)) {
+      return true;
+    }
+    const display = window.getComputedStyle(element).display;
+    return display.includes("block") || display.includes("flex") || display.includes("grid") || display.includes("table");
+  };
+
+  const findAtomicHost = (origin, atomicSelector) => {
+    if (!(origin instanceof Element)) return null;
+    const atomic = origin.closest(atomicSelector);
+    if (!atomic || !isInsidePageRoot(atomic)) return null;
+    const contentRoot = getContentRoot(atomic) || getPageRoot(atomic);
+    if (!contentRoot) return null;
+
+    const stableOwner = atomic.closest("[data-block-id]");
+    if (stableOwner && stableOwner !== contentRoot && !isScaffoldBlock(stableOwner) && buildStableSelector(stableOwner)) {
+      return stableOwner;
+    }
+
+    let candidate = atomic.parentElement;
+    while (candidate && candidate !== contentRoot) {
+      if (!isScaffoldBlock(candidate) && isBlockLikeElement(candidate) && buildStableSelector(candidate)) {
+        return candidate;
+      }
+      candidate = candidate.parentElement;
+    }
+
+    return null;
+  };
+
   const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
 
   const hasOnlyEditableTextChildren = (element) => {
@@ -203,6 +242,7 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     if (!(element instanceof Element)) return false;
     const tag = element.tagName ? element.tagName.toLowerCase() : "";
     if (!tag || BLOCKED_TEXT_TAGS.has(tag)) return false;
+    if (isRenderedFormulaNode(element)) return false;
     if (element.closest("svg, canvas, script, style")) return false;
     if (!hasOnlyEditableTextChildren(element)) return false;
     if (!TEXT_TAGS.has(tag) && !element.getAttribute("data-role") && !element.getAttribute("data-block-id")) return false;
@@ -216,6 +256,9 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     if (!isInsidePageRoot(element)) return false;
     if (isScaffoldBlock(element)) return false;
     if (["SCRIPT", "STYLE", "LINK", "META", "TITLE"].includes(element.tagName)) return false;
+    if (isRenderedFormulaNode(element)) return false;
+    if (element.closest("svg")) return false;
+    if (["CANVAS", "IFRAME"].includes(element.tagName)) return false;
     const boundaryRoot = getContentRoot(element) || getPageRoot(element);
     if (!boundaryRoot || element === boundaryRoot) return false;
     if (MODE === "text-edit" && !isEditableTextTarget(element)) return false;
@@ -240,13 +283,106 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     return element;
   };
 
-  const pickTarget = (origin) => {
+  const isPointInRect = (rect, clientX, clientY) => {
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  };
+
+  const getElementDepth = (element) => {
+    let depth = 0;
+    let current = element;
+    while (current && current.parentElement) {
+      depth += 1;
+      current = current.parentElement;
+    }
+    return depth;
+  };
+
+  const getPointTarget = (origin, clientX, clientY) => {
+    const hitElement = document.elementFromPoint(clientX, clientY);
+    const root = getPageRoot(origin) || getPageRoot(hitElement) || document.querySelector(".ppt-page-root, [data-ppt-guard-root='1']");
+    if (!root) return null;
+    const seen = new Set();
+    const candidates = [];
+    const addCandidate = (element) => {
+      if (!(element instanceof Element)) return;
+      if (seen.has(element)) return;
+      seen.add(element);
+      if (!root.contains(element)) return;
+      if (!isUsableTarget(element)) return;
+      const selector = buildStableSelector(element);
+      if (!selector) return;
+      const rect = element.getBoundingClientRect();
+      if (!isPointInRect(rect, clientX, clientY)) return;
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      candidates.push({
+        element,
+        area: Math.max(1, rect.width * rect.height),
+        distance: Math.hypot(centerX - clientX, centerY - clientY),
+        depth: getElementDepth(element),
+      });
+    };
+
+    if (typeof document.elementsFromPoint === "function") {
+      document.elementsFromPoint(clientX, clientY).forEach(addCandidate);
+    }
+    root.querySelectorAll("*").forEach(addCandidate);
+
+    candidates.sort((a, b) => a.area - b.area || b.depth - a.depth || a.distance - b.distance);
+    return candidates[0]?.element || null;
+  };
+
+  const pickCanvasTarget = (origin) => {
+    if (!(origin instanceof Element) || MODE === "text-edit") return null;
+    const canvas = origin.closest("canvas");
+    if (!canvas || !isInsidePageRoot(canvas)) return null;
+    const frame = canvas.closest(".ppt-chart-frame, [data-block-id*='chart'], [data-block-id*='graph'], [data-block-id*='plot']");
+    if (frame && !isScaffoldBlock(frame) && buildStableSelector(frame)) return frame;
+    const owner = canvas.closest("[data-block-id]");
+    if (owner && !isScaffoldBlock(owner) && buildStableSelector(owner)) return owner;
+    return findAtomicHost(canvas, "canvas");
+  };
+
+  const pickFormulaTarget = (origin) => {
+    if (!(origin instanceof Element) || MODE === "text-edit") return null;
+    return findAtomicHost(origin, ".katex, .katex-display, math, annotation, semantics");
+  };
+
+  const pickSvgTarget = (origin) => {
+    if (!(origin instanceof Element) || MODE === "text-edit") return null;
+    return findAtomicHost(origin, "svg");
+  };
+
+  const pickLooseContentTarget = (origin) => {
     if (!(origin instanceof Element)) return null;
     let candidate = origin;
     const boundaryRoot = getContentRoot(origin) || getPageRoot(origin);
     while (candidate && candidate !== boundaryRoot) {
-      if (isUsableTarget(candidate) && buildStableSelector(candidate)) return promoteToWrapper(candidate);
+      if (isUsableTarget(candidate) && buildStableSelector(candidate)) return candidate;
       candidate = candidate.parentElement;
+    }
+    return null;
+  };
+
+  const pickTarget = (origin, clientX, clientY) => {
+    if (!(origin instanceof Element)) return null;
+    const atomicTarget = pickCanvasTarget(origin) || pickFormulaTarget(origin) || pickSvgTarget(origin);
+    if (atomicTarget) return atomicTarget;
+
+    if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+      const pointTarget = getPointTarget(origin, clientX, clientY);
+      const atomicPointTarget = pickCanvasTarget(pointTarget) || pickFormulaTarget(pointTarget) || pickSvgTarget(pointTarget);
+      if (atomicPointTarget) return atomicPointTarget;
+      if (pointTarget) return promoteToWrapper(pointTarget);
+    }
+
+    const looseTarget = pickLooseContentTarget(origin);
+    if (looseTarget) return promoteToWrapper(looseTarget);
+
+    const blocks = Array.from(origin.closest(".ppt-page-root, [data-ppt-guard-root='1']")?.querySelectorAll("[data-block-id]") || []);
+    const target = origin.closest("[data-block-id]");
+    if (target && blocks.includes(target) && isInsidePageRoot(target) && !isScaffoldBlock(target)) {
+      return target;
     }
     return null;
   };
@@ -258,17 +394,22 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     const highlightColor = MODE === "text-edit" ? "#16a34a" : "#3b82f6";
     style.textContent = \`
       .\${HIGHLIGHT_CLASS} {
-        outline: 2px dashed \${highlightColor} !important;
-        outline-offset: 2px !important;
-        box-shadow: 0 0 0 2px \${MODE === "text-edit" ? "rgba(22,163,74,0.18)" : "rgba(59,130,246,0.18)"} !important;
-        background-image: linear-gradient(\${MODE === "text-edit" ? "rgba(22,163,74,0.08)" : "rgba(59,130,246,0.08)"}, \${MODE === "text-edit" ? "rgba(22,163,74,0.08)" : "rgba(59,130,246,0.08)"}) !important;
         cursor: \${MODE === "text-edit" ? "text" : "crosshair"} !important;
+      }
+      #\${OVERLAY_ID} {
+        position: fixed !important;
+        z-index: 2147483646 !important;
+        pointer-events: none !important;
+        border: 2px dashed \${highlightColor} !important;
+        box-shadow: 0 0 0 3px \${MODE === "text-edit" ? "rgba(22,163,74,0.14)" : "rgba(59,130,246,0.14)"} !important;
+        box-sizing: border-box !important;
       }
     \`;
     document.head.appendChild(style);
   };
 
   let activeElement = null;
+  let highlightOverlayElement = null;
   const cursorHost = document.body || document.documentElement;
   const previousCursor = cursorHost && cursorHost.style ? cursorHost.style.cursor : "";
   if (cursorHost && cursorHost.style) {
@@ -276,11 +417,71 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
   }
   ensureStyle();
 
+  const getVisualBounds = (element) => {
+    const base = element.getBoundingClientRect();
+    let left = base.left;
+    let top = base.top;
+    let right = base.right;
+    let bottom = base.bottom;
+
+    const includeRect = (rect) => {
+      if (!rect || (rect.width < 0.5 && rect.height < 0.5)) return;
+      left = Math.min(left, rect.left);
+      top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right);
+      bottom = Math.max(bottom, rect.bottom);
+    };
+
+    Array.from(element.getClientRects ? element.getClientRects() : [base]).forEach(includeRect);
+    element.querySelectorAll("*").forEach((child) => {
+      if (!(child instanceof Element)) return;
+      if (child.id === OVERLAY_ID) return;
+      if (["SCRIPT", "STYLE", "LINK", "META", "TITLE"].includes(child.tagName)) return;
+      if (child.closest(".katex-mathml")) return;
+      Array.from(child.getClientRects ? child.getClientRects() : [child.getBoundingClientRect()]).forEach(includeRect);
+    });
+
+    return {
+      left,
+      top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
+    };
+  };
+
+  const ensureHighlightOverlay = () => {
+    if (highlightOverlayElement && highlightOverlayElement.isConnected) return highlightOverlayElement;
+    const overlay = document.createElement("div");
+    overlay.id = OVERLAY_ID;
+    document.body.appendChild(overlay);
+    highlightOverlayElement = overlay;
+    return highlightOverlayElement;
+  };
+
+  const updateHighlightOverlay = () => {
+    if (!activeElement) {
+      if (highlightOverlayElement) highlightOverlayElement.remove();
+      highlightOverlayElement = null;
+      return;
+    }
+    const overlay = ensureHighlightOverlay();
+    const rect = getVisualBounds(activeElement);
+    const pad = 4;
+    overlay.style.left = (rect.left - pad).toFixed(1) + "px";
+    overlay.style.top = (rect.top - pad).toFixed(1) + "px";
+    overlay.style.width = Math.max(1, rect.width + pad * 2).toFixed(1) + "px";
+    overlay.style.height = Math.max(1, rect.height + pad * 2).toFixed(1) + "px";
+  };
+
   const setActive = (el) => {
-    if (activeElement === el) return;
+    if (activeElement === el) {
+      updateHighlightOverlay();
+      return;
+    }
     if (activeElement) activeElement.classList.remove(HIGHLIGHT_CLASS);
     activeElement = el;
     if (activeElement) activeElement.classList.add(HIGHLIGHT_CLASS);
+    updateHighlightOverlay();
   };
 
   const clearActive = () => {
@@ -288,10 +489,11 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
       activeElement.classList.remove(HIGHLIGHT_CLASS);
       activeElement = null;
     }
+    updateHighlightOverlay();
   };
 
   const onMouseMove = (event) => {
-    const target = pickTarget(event.target);
+    const target = pickTarget(event.target, event.clientX, event.clientY);
     if (!target) {
       clearActive();
       return;
@@ -300,7 +502,7 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
   };
 
   const onClick = (event) => {
-    const target = pickTarget(event.target);
+    const target = pickTarget(event.target, event.clientX, event.clientY);
     if (!target) return;
     const selector = buildStableSelector(target);
     if (!selector) {
@@ -359,7 +561,13 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("scroll", updateHighlightOverlay, true);
+    window.removeEventListener("resize", updateHighlightOverlay, true);
     clearActive();
+    if (highlightOverlayElement) {
+      highlightOverlayElement.remove();
+      highlightOverlayElement = null;
+    }
     const style = document.getElementById(STYLE_ID);
     if (style) style.remove();
     if (cursorHost && cursorHost.style) {
@@ -371,6 +579,8 @@ export function buildInspectorInjectScript(options?: { mode?: 'inspect' | 'text-
   document.addEventListener("mousemove", onMouseMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("scroll", updateHighlightOverlay, true);
+  window.addEventListener("resize", updateHighlightOverlay, true);
 
   window[STATE_KEY] = { active: true, cleanup };
 })();

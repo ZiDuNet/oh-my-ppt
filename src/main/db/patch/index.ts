@@ -8,6 +8,7 @@ import type { GenerationPageStatus, GenerationRunStatus } from '../schema'
 import { defaultModelTimeoutMs } from '@shared/model-timeout'
 import { patchModelConfigMaxTokens } from './add-model-max-tokens'
 import { patchStylesColumns } from './add-styles-columns'
+import { patchDesignContractFonts } from './backfill-design-contract-fonts'
 
 type LibSqlClient = ReturnType<typeof createClient>
 type DrizzleDb = ReturnType<typeof drizzle>
@@ -1123,6 +1124,7 @@ export const runDatabasePatches = async (args: {
   await client.execute('PRAGMA foreign_keys = ON;')
   await ensureDefaultSettings(client)
   await patchProjectRootPaths({ client, resolveStoragePath })
+  await patchDesignContractFonts(client)
   await patchGenerationRecordsFromMetadata({ client, db, resolveStoragePath })
   await patchSessionPagesFromLegacy({ client, db, resolveStoragePath })
   await patchSessionPagesFromGenerationPages({ client, db, resolveStoragePath })

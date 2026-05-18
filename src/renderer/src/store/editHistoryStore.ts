@@ -26,6 +26,33 @@ export interface TextEditItem {
   }
 }
 
+export interface PropertyEditItem {
+  pageId: string
+  htmlPath: string
+  selector: string
+  blockId?: string
+  patch: {
+    text?: string
+    style?: {
+      zIndex?: number
+      opacity?: number
+      backgroundColor?: string
+      color?: string
+      fontSize?: string
+      fontWeight?: string
+      objectFit?: string
+    }
+    attrs?: {
+      alt?: string
+      poster?: string
+      controls?: boolean
+      muted?: boolean
+      loop?: boolean
+      autoplay?: boolean
+    }
+  }
+}
+
 export interface DeleteItem {
   pageId: string
   htmlPath: string
@@ -44,6 +71,7 @@ export interface AddElementItem {
 export interface EditSnapshot {
   dragEdits: DragEditItem[]
   textEdits: TextEditItem[]
+  propertyEdits: PropertyEditItem[]
   deletes: DeleteItem[]
   addElements: AddElementItem[]
 }
@@ -63,6 +91,14 @@ function cloneSnapshot(s: EditSnapshot): EditSnapshot {
         style: { ...e.patch.style }
       }
     })),
+    propertyEdits: s.propertyEdits.map((e) => ({
+      ...e,
+      patch: {
+        text: e.patch.text,
+        style: e.patch.style ? { ...e.patch.style } : undefined,
+        attrs: e.patch.attrs ? { ...e.patch.attrs } : undefined
+      }
+    })),
     deletes: s.deletes.map((e) => ({ ...e })),
     addElements: s.addElements.map((e) => ({ ...e }))
   }
@@ -71,10 +107,28 @@ function cloneSnapshot(s: EditSnapshot): EditSnapshot {
 function takeSnapshot(
   dragEdits: DragEditItem[],
   textEdits: TextEditItem[],
+  propertyEdits: PropertyEditItem[],
   deletes: DeleteItem[],
   addElements: AddElementItem[]
 ): EditSnapshot {
-  return cloneSnapshot({ dragEdits, textEdits, deletes, addElements })
+  return cloneSnapshot({ dragEdits, textEdits, propertyEdits, deletes, addElements })
+}
+
+function compactPatchObject<T extends Record<string, unknown>>(value: T | undefined): Partial<T> {
+  if (!value) return {}
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>
+}
+
+function propertyPatchEquals(a: PropertyEditItem['patch'], b: PropertyEditItem['patch']): boolean {
+  const aStyle = compactPatchObject(a.style)
+  const bStyle = compactPatchObject(b.style)
+  const aAttrs = compactPatchObject(a.attrs)
+  const bAttrs = compactPatchObject(b.attrs)
+  return (
+    a.text === b.text &&
+    JSON.stringify(aStyle) === JSON.stringify(bStyle) &&
+    JSON.stringify(aAttrs) === JSON.stringify(bAttrs)
+  )
 }
 
 // ─── Store ────────────────────────────────────────────
@@ -82,6 +136,7 @@ function takeSnapshot(
 interface EditHistoryState {
   dragEdits: DragEditItem[]
   textEdits: TextEditItem[]
+  propertyEdits: PropertyEditItem[]
   deletes: DeleteItem[]
   addElements: AddElementItem[]
   undoStack: EditSnapshot[]
@@ -89,6 +144,7 @@ interface EditHistoryState {
 
   upsertDragEdit: (edit: DragEditItem) => void
   upsertTextEdit: (edit: TextEditItem) => void
+  upsertPropertyEdit: (edit: PropertyEditItem) => void
   addDelete: (item: DeleteItem) => void
   addElement: (item: AddElementItem) => void
   undo: () => EditSnapshot | null
@@ -103,6 +159,7 @@ interface EditHistoryState {
 export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
   dragEdits: [],
   textEdits: [],
+  propertyEdits: [],
   deletes: [],
   addElements: [],
   undoStack: [],
@@ -110,7 +167,7 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
 
   upsertDragEdit: (edit) =>
     set((state) => {
-      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
       const idx = state.dragEdits.findIndex(
         (item) =>
           item.pageId === edit.pageId &&
@@ -152,7 +209,7 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
 
   upsertTextEdit: (edit) =>
     set((state) => {
-      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
       const idx = state.textEdits.findIndex(
         (item) =>
           item.pageId === edit.pageId &&
@@ -169,9 +226,45 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
       }
     }),
 
+  upsertPropertyEdit: (edit) =>
+    set((state) => {
+      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
+      const idx = state.propertyEdits.findIndex(
+        (item) =>
+          item.pageId === edit.pageId &&
+          item.htmlPath === edit.htmlPath &&
+          item.selector === edit.selector
+      )
+      const mergePatch = (prev: PropertyEditItem['patch'], next: PropertyEditItem['patch']): PropertyEditItem['patch'] => ({
+        text: next.text ?? prev.text,
+        style: {
+          ...(prev.style || {}),
+          ...(next.style || {})
+        },
+        attrs: {
+          ...(prev.attrs || {}),
+          ...(next.attrs || {})
+        }
+      })
+      const next =
+        idx < 0
+          ? [...state.propertyEdits, edit]
+          : state.propertyEdits.map((item, i) =>
+              i === idx ? { ...item, ...edit, patch: mergePatch(item.patch, edit.patch) } : item
+            )
+      if (idx >= 0 && propertyPatchEquals(state.propertyEdits[idx].patch, next[idx].patch)) {
+        return state
+      }
+      return {
+        undoStack: [...state.undoStack, snapshot],
+        redoStack: [],
+        propertyEdits: next
+      }
+    }),
+
   addDelete: (item) =>
     set((state) => {
-      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
       return {
         undoStack: [...state.undoStack, snapshot],
         redoStack: [],
@@ -181,7 +274,7 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
 
   addElement: (item) =>
     set((state) => {
-      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+      const snapshot = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
       return {
         undoStack: [...state.undoStack, snapshot],
         redoStack: [],
@@ -193,12 +286,13 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
     const state = get()
     if (state.undoStack.length === 0) return null
     const prev = state.undoStack[state.undoStack.length - 1]
-    const current = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+    const current = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
     set({
       undoStack: state.undoStack.slice(0, -1),
       redoStack: [...state.redoStack, current],
       dragEdits: prev.dragEdits,
       textEdits: prev.textEdits,
+      propertyEdits: prev.propertyEdits,
       deletes: prev.deletes,
       addElements: prev.addElements
     })
@@ -209,12 +303,13 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
     const state = get()
     if (state.redoStack.length === 0) return null
     const next = state.redoStack[state.redoStack.length - 1]
-    const current = takeSnapshot(state.dragEdits, state.textEdits, state.deletes, state.addElements)
+    const current = takeSnapshot(state.dragEdits, state.textEdits, state.propertyEdits, state.deletes, state.addElements)
     set({
       redoStack: state.redoStack.slice(0, -1),
       undoStack: [...state.undoStack, current],
       dragEdits: next.dragEdits,
       textEdits: next.textEdits,
+      propertyEdits: next.propertyEdits,
       deletes: next.deletes,
       addElements: next.addElements
     })
@@ -224,12 +319,13 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
   canUndo: () => get().undoStack.length > 0,
   canRedo: () => get().redoStack.length > 0,
 
-  clearPage: (_pageId) =>
-    set(() => ({
-      dragEdits: [],
-      textEdits: [],
-      deletes: [],
-      addElements: [],
+  clearPage: (pageId) =>
+    set((state) => ({
+      dragEdits: state.dragEdits.filter((item) => item.pageId !== pageId),
+      textEdits: state.textEdits.filter((item) => item.pageId !== pageId),
+      propertyEdits: state.propertyEdits.filter((item) => item.pageId !== pageId),
+      deletes: state.deletes.filter((item) => item.pageId !== pageId),
+      addElements: state.addElements.filter((item) => item.pageId !== pageId),
       undoStack: [],
       redoStack: []
     })),
@@ -238,6 +334,7 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
     set({
       dragEdits: [],
       textEdits: [],
+      propertyEdits: [],
       deletes: [],
       addElements: [],
       undoStack: [],
@@ -249,6 +346,7 @@ export const useEditHistoryStore = create<EditHistoryState>((set, get) => ({
     return {
       dragEdits: state.dragEdits.filter((e) => e.pageId === pageId),
       textEdits: state.textEdits.filter((e) => e.pageId === pageId),
+      propertyEdits: state.propertyEdits.filter((e) => e.pageId === pageId),
       deletes: state.deletes.filter((e) => e.pageId === pageId),
       addElements: state.addElements.filter((e) => e.pageId === pageId)
     }

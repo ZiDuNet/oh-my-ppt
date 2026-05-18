@@ -94,6 +94,15 @@ export interface ExportDeckResult {
   pageCount?: number
 }
 
+export interface ImportSessionFileResult {
+  success: boolean
+  cancelled?: boolean
+  sessionId?: string
+  title?: string
+  pageCount?: number
+  warnings?: string[]
+}
+
 export interface EnsureElementAnchorPayload {
   sessionId?: string
   htmlPath: string
@@ -285,6 +294,8 @@ export const ipc = {
     getIpc().invoke('session:delete', sessionId) as Promise<{ success: boolean }>,
   updateSessionTitle: (payload: { sessionId: string; title: string }) =>
     getIpc().invoke('session:updateTitle', payload) as Promise<{ ok: boolean }>,
+  importSessionFile: () =>
+    getIpc().invoke('session:importFile') as Promise<ImportSessionFileResult>,
   startGenerate: (payload: GenerateStartPayload) =>
     getIpc().invoke('generate:start', payload) as Promise<{
       success: boolean
@@ -349,6 +360,8 @@ export const ipc = {
     getIpc().invoke('export:pptx', { sessionId, ...options }) as Promise<ExportDeckResult>,
   exportSlidePack: (sessionId: string) =>
     getIpc().invoke('export:slidePack', { sessionId }) as Promise<ExportDeckResult>,
+  exportSessionZip: (sessionId: string) =>
+    getIpc().invoke('export:sessionZip', { sessionId }) as Promise<ExportDeckResult>,
   getSettings: () => getIpc().invoke('settings:get') as Promise<Record<string, unknown>>,
   listModelConfigs: () => getIpc().invoke('settings:listModelConfigs') as Promise<ModelConfig[]>,
   validateUploadPrerequisites: () =>
@@ -504,6 +517,7 @@ export const ipc = {
     pageId: string
     dragEdits: unknown[]
     textEdits: unknown[]
+    propertyEdits?: unknown[]
     deletes?: unknown[]
     addElements?: unknown[]
     prompt?: string
@@ -512,8 +526,10 @@ export const ipc = {
       success: boolean
       dragCount: number
       textCount: number
+      propertyCount?: number
       deleteCount: number
       addCount: number
+      warnings?: string[]
     }>,
   openFile: (filePath: string, sessionId?: string) =>
     getIpc().invoke('file:open', { path: filePath, sessionId }) as Promise<string>,

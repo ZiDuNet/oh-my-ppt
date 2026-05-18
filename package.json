@@ -1,6 +1,6 @@
 {
   "name": "oh-my-ppt",
-  "version": "2.0.9",
+  "version": "2.0.10",
   "description": "Oh My PPT - Local-first AI presentation workbench",
   "main": "./out/main/index.js",
   "author": "arcsin1",
@@ -69,6 +69,7 @@
     "nanoid": "^5.1.9",
     "pdf-lib": "^1.17.1",
     "pptxtojson": "^2.0.2",
+    "react-colorful": "^5.7.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.1.1",
     "sonner": "^2.0.7",

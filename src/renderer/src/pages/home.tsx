@@ -500,7 +500,7 @@ export function HomePage(): ReactElement {
         <h1 className="organic-serif mt-2 text-[32px] font-semibold leading-none text-[#3e4a32]">
           {t('home.title')}
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">{t('home.description')}</p>
+        <p className="mt-2 text-[12px] text-muted-foreground">{t('home.description')}</p>
       </div>
 
       <div className="space-y-4">
